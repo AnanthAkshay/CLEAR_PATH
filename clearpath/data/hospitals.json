@@ -1,0 +1,36 @@
+[
+  {
+    "id": "HOSP_CENTRAL",
+    "name": "Central Memorial Hospital",
+    "node_id": "j_0_5",
+    "x": 1000.0,
+    "y": 0.0,
+    "total_beds": 120,
+    "available_beds": 14,
+    "emergency_wait_min": 15,
+    "specialties": ["TRAUMA", "CARDIAC", "NEURO", "BURN"]
+  },
+  {
+    "id": "HOSP_WEST",
+    "name": "Westside Community Clinic",
+    "node_id": "j_5_0",
+    "x": 0.0,
+    "y": 1000.0,
+    "total_beds": 60,
+    "available_beds": 8,
+    "emergency_wait_min": 25,
+    "specialties": ["TRAUMA", "GENERAL"]
+  },
+  {
+    "id": "HOSP_NORTH",
+    "name": "North General Hospital",
+    "node_id": "j_5_5",
+    "x": 1000.0,
+    "y": 1000.0,
+    "total_beds": 90,
+    "available_beds": 2,
+    "emergency_wait_min": 45,
+    "specialties": ["CARDIAC", "PEDIATRIC"]
+  }
+]
+
