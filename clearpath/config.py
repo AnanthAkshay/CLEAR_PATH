@@ -36,11 +36,20 @@ class SimConfig:
         queue_flush_threshold: Vehicle queue count triggering proactive flushing.
         recovery_s: Duration of post-preemption signal recovery phase (seconds).
         max_preemption_hold_s: Maximum hold time for an active preemption lock (seconds).
+        negotiation_timeout_ticks: Ticks to wait for a downstream ReserveAck before treating it as a Nack.
+        bus_silence_timeout_ticks: Ticks of bus silence tolerated while holding before the fail-safe releases.
         alpha: Weight assigned to travel time vs. hospital wait time in routing (0.0 to 1.0).
+        reference_travel_s: Travel time counted as one whole unit of the travel term (s).
+        reference_wait_s: ER wait counted as one whole unit of the wait term (s).
+        min_speed_mps: Floor on effective edge speed in the dispatcher cost model (m/s).
+        avg_gap_m: Assumed bumper gap added to vehicle length when estimating headway (m).
         hmac_secret: Shared secret for preemption token verification.
         token_ttl_s: Time-to-live expiration limit for cryptographic tokens (seconds).
+        clock_skew_s: Allowed token timestamp drift into the future (seconds).
+        authorized_vehicle_ids: Vehicle IDs allowed to request preemption (empty = no restriction).
         heading_tolerance_deg: Allowed discrepancy between reported heading and road vector.
         position_tolerance_m: Allowed distance deviation between reported GPS and road segment.
+        risk_weight_heading: Risk score added by a single heading mismatch (blocks above 0.6).
         rate_limit_per_vehicle_per_min: Maximum permitted preemption requests per vehicle per minute.
     """
 
@@ -73,9 +82,15 @@ class SimConfig:
     queue_flush_threshold: int = 12
     recovery_s: int = 20
     max_preemption_hold_s: int = 45
+    negotiation_timeout_ticks: int = 5
+    bus_silence_timeout_ticks: int = 15
 
     # Dispatcher routing weights
     alpha: float = 0.7
+    reference_travel_s: float = 120.0
+    reference_wait_s: float = 1800.0
+    min_speed_mps: float = 2.0
+    avg_gap_m: float = 5.0
 
     # Security verification parameters
     hmac_secret: str = field(
@@ -84,8 +99,11 @@ class SimConfig:
         )
     )
     token_ttl_s: int = 60
+    clock_skew_s: float = 5.0
+    authorized_vehicle_ids: frozenset[str] = field(default_factory=frozenset)
     heading_tolerance_deg: float = 35.0
     position_tolerance_m: float = 30.0
+    risk_weight_heading: float = 1.0
     rate_limit_per_vehicle_per_min: int = 6
 
 
