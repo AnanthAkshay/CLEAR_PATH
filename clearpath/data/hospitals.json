@@ -2,35 +2,65 @@
   {
     "id": "HOSP_CENTRAL",
     "name": "Central Memorial Hospital",
-    "node_id": "j_0_5",
+    "node": "j_0_5",
     "x": 1000.0,
     "y": 0.0,
     "total_beds": 120,
-    "available_beds": 14,
-    "emergency_wait_min": 15,
-    "specialties": ["TRAUMA", "CARDIAC", "NEURO", "BURN"]
+    "available_beds_by_unit": {
+      "trauma": 0,
+      "cardiac": 6,
+      "stroke": 9,
+      "general": 14
+    },
+    "specialties": ["trauma", "cardiac", "stroke", "general"],
+    "avg_wait_time_min": 45
+  },
+  {
+    "id": "HOSP_RIVERSIDE",
+    "name": "Riverside Urgent Care",
+    "node": "j_2_2",
+    "x": 400.0,
+    "y": 400.0,
+    "total_beds": 45,
+    "available_beds_by_unit": {
+      "trauma": 2,
+      "cardiac": 1,
+      "stroke": 0,
+      "general": 6
+    },
+    "specialties": ["trauma", "cardiac", "general"],
+    "avg_wait_time_min": 12
   },
   {
     "id": "HOSP_WEST",
     "name": "Westside Community Clinic",
-    "node_id": "j_5_0",
+    "node": "j_5_0",
     "x": 0.0,
     "y": 1000.0,
     "total_beds": 60,
-    "available_beds": 8,
-    "emergency_wait_min": 25,
-    "specialties": ["TRAUMA", "GENERAL"]
+    "available_beds_by_unit": {
+      "trauma": 4,
+      "cardiac": 2,
+      "stroke": 1,
+      "general": 8
+    },
+    "specialties": ["trauma", "general"],
+    "avg_wait_time_min": 25
   },
   {
     "id": "HOSP_NORTH",
     "name": "North General Hospital",
-    "node_id": "j_5_5",
+    "node": "j_5_5",
     "x": 1000.0,
     "y": 1000.0,
     "total_beds": 90,
-    "available_beds": 2,
-    "emergency_wait_min": 45,
-    "specialties": ["CARDIAC", "PEDIATRIC"]
+    "available_beds_by_unit": {
+      "trauma": 0,
+      "cardiac": 5,
+      "stroke": 3,
+      "general": 2
+    },
+    "specialties": ["cardiac", "stroke", "general"],
+    "avg_wait_time_min": 20
   }
 ]
-

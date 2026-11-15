@@ -60,7 +60,7 @@ class RoadNetwork:
                 data = json.load(f)
                 for hosp in data:
                     self.hospitals[hosp["id"]] = hosp
-                    self.hospital_nodes.add(hosp["node_id"])
+                    self.hospital_nodes.add(hosp["node"])
 
     def _build_grid(self) -> None:
         """Construct the N x M Manhattan grid graph with dual directed edges."""
