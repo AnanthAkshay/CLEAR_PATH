@@ -240,9 +240,12 @@ class SignalController:
                 # Check if we were preempted towards NS or normal EW
                 if self.is_preempted and self.pending_target == SignalPhase.NS_GREEN:
                     self.phase = SignalPhase.NS_GREEN
-                    self.pending_target = None
                 else:
                     self.phase = SignalPhase.EW_GREEN
+                # The target is reached, whichever direction it came from: the
+                # hold branch and the max-hold safety both key on pending_target
+                # being clear, so leaving it set silently disables them.
+                self.pending_target = None
                 self.time_in_phase_s = 0.0
 
         elif self.phase == SignalPhase.EW_GREEN:
@@ -260,7 +263,7 @@ class SignalController:
                 # Check if we were preempted towards EW or normal NS
                 if self.is_preempted and self.pending_target == SignalPhase.EW_GREEN:
                     self.phase = SignalPhase.EW_GREEN
-                    self.pending_target = None
                 else:
                     self.phase = SignalPhase.NS_GREEN
+                self.pending_target = None
                 self.time_in_phase_s = 0.0

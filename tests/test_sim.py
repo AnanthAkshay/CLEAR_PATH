@@ -9,13 +9,11 @@ Covers:
 
 from __future__ import annotations
 
-import networkx as nx
-import numpy as np
 import pytest
 
 from clearpath.config import load_config
 from clearpath.sim.network import RoadNetwork
-from clearpath.sim.signals import SignalController, SignalPhase
+from clearpath.sim.signals import SignalController
 from clearpath.sim.simulator import Simulator
 
 
