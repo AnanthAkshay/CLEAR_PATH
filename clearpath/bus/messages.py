@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Tuple
+from typing import Dict, List, Tuple
 
 
 @dataclass
@@ -90,12 +90,29 @@ class AuthResult(Message):
         is_authenticated: True if cryptographic and kinematic checks passed.
         reasons: List of explanatory flags or failure rationales.
         security_log: Structured log summary of verification details.
+        risk_score: Weighted 0..1 suspicion score contributed by soft telemetry deviations.
     """
 
     vehicle_id: str = ""
     is_authenticated: bool = False
     reasons: List[str] = field(default_factory=list)
     security_log: str = ""
+    risk_score: float = 0.0
+
+
+@dataclass
+class RevokePreemption(Message):
+    """Order cancelling an active preemption grant for a vehicle.
+
+    Attributes:
+        vehicle_id: Vehicle whose authorization is withdrawn.
+        reason: Comma-separated reason codes that triggered the revocation.
+
+    The issue time is the inherited ``ts`` field.
+    """
+
+    vehicle_id: str = ""
+    reason: str = ""
 
 
 @dataclass

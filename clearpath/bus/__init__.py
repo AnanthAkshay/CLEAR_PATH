@@ -14,6 +14,7 @@ from clearpath.bus.messages import (
     ReserveAck,
     ReserveCorridor,
     ReserveNack,
+    RevokePreemption,
     RoutePlan,
     Telemetry,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "PassedNotice",
     "RecoveryStarted",
     "RecoveryDone",
+    "RevokePreemption",
     "GuidanceAdvisory",
 ]
 
