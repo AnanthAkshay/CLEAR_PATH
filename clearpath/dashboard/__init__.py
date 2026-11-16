@@ -1,2 +1,1 @@
-"""Streamlit dashboard for ClearPath-lite simulation monitoring."""
-
+"""ClearPath-lite Streamlit dashboard package."""

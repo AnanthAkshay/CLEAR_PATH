@@ -114,6 +114,7 @@ class SecurityAgent(Agent):
         edge = self._edge(telemetry.edge_id)
         reasons, risk = self._telemetry_reasons(telemetry, edge, vehicle_id, now)
         if not (set(reasons) & _HARD) and risk <= _RISK_BLOCK:
+            self._last[vehicle_id] = (telemetry.x, telemetry.y, edge, now)
             return True
 
         self.bus.publish(
@@ -251,7 +252,8 @@ class SecurityAgent(Agent):
             return False
         if edge is None:
             return True
-        return telemetry.speed_mps <= float(self.graph[edge[0]][edge[1]]["speed_limit_mps"])
+        limit = float(self.graph[edge[0]][edge[1]]["speed_limit_mps"])
+        return telemetry.speed_mps <= max(self.config.ambulance_max_mps, limit * 1.5)
 
     def _position_ok(self, telemetry: Any, edge: Optional[Tuple[str, str]]) -> bool:
         """Reported (x, y) must project onto the named edge within tolerance."""
