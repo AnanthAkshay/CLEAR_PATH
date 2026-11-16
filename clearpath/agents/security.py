@@ -20,7 +20,7 @@ from clearpath.config import SimConfig
 _RISK_BLOCK = 0.6
 _RATE_WINDOW_S = 60.0
 _HARD = frozenset(
-    {"TOKEN", "RATE_LIMIT", "SPEED_LIMIT", "POSITION_ON_ROAD", "CONTINUITY"}
+    {"TOKEN", "UNAUTHORIZED_VEHICLE", "RATE_LIMIT", "SPEED_LIMIT", "POSITION_ON_ROAD", "CONTINUITY"}
 )
 
 
@@ -87,7 +87,10 @@ class SecurityAgent(Agent):
                 detail = "verification failure budget exhausted"
             else:
                 self._record_claimed_failure(request.vehicle_id, now)
-                reasons.append("TOKEN")
+                if token_error == "vehicle not in authorized fleet":
+                    reasons.append("UNAUTHORIZED_VEHICLE")
+                else:
+                    reasons.append("TOKEN")
                 detail = token_error
         elif self._rate_limited(str(parsed["vehicle_id"]), now):
             reasons.append("RATE_LIMIT")
@@ -242,9 +245,16 @@ class SecurityAgent(Agent):
         return limited
 
     def _prune_nonces(self, now: float) -> None:
-        """Drop nonce records older than the token lifetime."""
+        """Drop nonce records older than the token lifetime and enforce replay cache capacity bounds."""
         ttl = self.config.token_ttl_s
+        max_nonces = getattr(self.config, "max_replay_cache_size", 10000)
         self._nonces = {n: t for n, t in self._nonces.items() if now - t <= ttl}
+        # Enforce strict bounded replay cache to prevent memory exhaustion attacks
+        if len(self._nonces) > max_nonces:
+            excess = len(self._nonces) - max_nonces
+            oldest_keys = sorted(self._nonces, key=lambda k: self._nonces[k])[:excess]
+            for k in oldest_keys:
+                self._nonces.pop(k, None)
 
     def _speed_ok(self, telemetry: Any, edge: Optional[Tuple[str, str]]) -> bool:
         """Speed must respect the fleet ceiling and the edge's own posted limit."""

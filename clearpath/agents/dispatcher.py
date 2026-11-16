@@ -56,6 +56,16 @@ class DispatcherAgent(Agent):
         self.clock = clock
         self._auth: Dict[str, AuthResult] = {}
         self._plans: Dict[str, Dict[str, Any]] = {}
+        self._cached_weights_tick: Optional[int] = None
+        self._cached_weights: Dict[Tuple[str, str], float] = {}
+        self._static_edge_params: Dict[Tuple[str, str], Tuple[float, float, float, float]] = {}
+        if hasattr(self.network, "graph"):
+            for u, v, data in self.network.graph.edges(data=True):
+                length = float(data["length_m"])
+                limit = float(data["speed_limit_mps"])
+                spacing = self.config.vehicle_length_m + self.config.avg_gap_m
+                jam_per_km = int(data.get("lanes", 1)) * 1000.0 / spacing
+                self._static_edge_params[(u, v)] = (length, limit, spacing, jam_per_km)
 
     def on_message(self, msg: Message) -> None:
         """Record authentication verdicts; a revocation withdraws authorization."""
@@ -273,24 +283,40 @@ class DispatcherAgent(Agent):
         Returns:
             Edge cost in seconds.
         """
-        u, v = edge
-        data = self.network.graph[u][v]
-        length = float(data["length_m"])
-        limit = float(data["speed_limit_mps"])
-        spacing = self.config.vehicle_length_m + self.config.avg_gap_m
-        jam_per_km = int(data.get("lanes", 1)) * 1000.0 / spacing
-        density = min(1.0, max(0.0, float(world_view.densities.get(edge, 0.0))) / jam_per_km)
+        params = self._static_edge_params.get(edge)
+        if params is not None:
+            length, limit, spacing, jam_per_km = params
+        else:
+            u, v = edge
+            data = self.network.graph[u][v]
+            length = float(data["length_m"])
+            limit = float(data["speed_limit_mps"])
+            spacing = self.config.vehicle_length_m + self.config.avg_gap_m
+            jam_per_km = int(data.get("lanes", 1)) * 1000.0 / spacing
+
+        densities = getattr(world_view, "densities", {}) or {}
+        queues = getattr(world_view, "queues", {}) or {}
+        density = min(1.0, max(0.0, float(densities.get(edge, 0.0))) / jam_per_km)
         effective = max(self.config.min_speed_mps, limit * (1.0 - density))
         headway = spacing / effective
-        queue_len = int(world_view.queues.get(edge, 0))
+        queue_len = int(queues.get(edge, 0))
         return length / effective + queue_len * headway
 
     def _weights(self, world_view: Any) -> Dict[Tuple[str, str], float]:
-        """Cost every edge of the network for the current world view."""
-        return {
-            (u, v): self._edge_cost((u, v), world_view)
-            for u, v in self.network.graph.edges()
+        """Cost every edge of the network for the current world view (cached per tick)."""
+        tick = getattr(world_view, "tick", None)
+        if tick is not None and self._cached_weights_tick == tick:
+            return self._cached_weights
+
+        edge_iter = self._static_edge_params.keys() if self._static_edge_params else self.network.graph.edges()
+        weights = {
+            edge: self._edge_cost(edge, world_view)
+            for edge in edge_iter
         }
+        if tick is not None:
+            self._cached_weights_tick = tick
+            self._cached_weights = weights
+        return weights
 
     def _heuristic(self, u: str, v: str) -> float:
         """Euclidean distance over max speed: admissible lower bound on cost."""

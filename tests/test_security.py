@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import networkx as nx
+import pytest
 
 from clearpath.agents.security import SecurityAgent
 from clearpath.agents.tokens import issue_token
@@ -125,7 +126,7 @@ def test_unknown_vehicle_blocked() -> None:
     result = _agent([0.0]).authenticate(_request(vehicle_id="AMB_9"))
 
     assert result.is_authenticated is False
-    assert "TOKEN" in result.reasons
+    assert "UNAUTHORIZED_VEHICLE" in result.reasons
 
 
 def test_speeding_on_residential_blocked() -> None:
@@ -340,3 +341,44 @@ def test_counters_and_audit_trail() -> None:
     assert agent.audit_trail[0]["allowed"] is True
     assert agent.audit_trail[0]["risk_score"] == 0.0
     assert agent.audit_trail[1]["reasons"] == ["TOKEN"]
+
+
+def test_dev_default_secret_triggers_warning() -> None:
+    """Instantiating SimConfig with the dev default secret triggers a loud UserWarning."""
+    import warnings
+    from clearpath.config import DEV_DEFAULT_SECRET, SimConfig
+
+    with pytest.warns(UserWarning, match="insecure development default HMAC secret"):
+        _ = SimConfig(hmac_secret=DEV_DEFAULT_SECRET)
+
+    # A custom production secret must NOT trigger this warning
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+        _ = SimConfig(hmac_secret="production-super-secure-secret-xyz-987")
+        assert not any("insecure development default HMAC secret" in str(w.message) for w in recorded)
+
+
+def test_replay_cache_capacity_is_bounded() -> None:
+    """SecurityAgent replay cache stays strictly bounded under nonce flooding."""
+    config = SimConfig(
+        hmac_secret=SECRET,
+        token_ttl_s=60,
+        authorized_vehicle_ids=frozenset({"AMB_1"}),
+        max_replay_cache_size=5,
+        rate_limit_per_vehicle_per_min=100,
+    )
+    now = [0.0]
+    agent = SecurityAgent("security", MessageBus(seed=1), config, _graph(), clock=lambda: now[0])
+
+    # Inject 8 valid requests with distinct nonces within the same second
+    for i in range(8):
+        now[0] = float(i)
+        req = _request(nonce=f"nonce_{i}", ts=float(i))
+        res = agent.authenticate(req)
+        assert res.is_authenticated is True
+
+    # Enforce that replay cache never exceeds max_replay_cache_size (5)
+    assert len(agent._nonces) <= 5
+    # The most recent nonces must be preserved while the oldest were evicted
+    assert "nonce_7" in agent._nonces
+    assert "nonce_0" not in agent._nonces

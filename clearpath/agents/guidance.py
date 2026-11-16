@@ -142,11 +142,18 @@ class GuidanceAgent(Agent):
 
         # ambulance id currently being tracked (set from world view each tick)
         self._ambulance_id: Optional[str] = None
+        # active ambulance routes received over the message bus
+        self._routes: Dict[str, List[str]] = {}
 
     # ── Agent interface ───────────────────────────────────────────────────────
 
     def on_message(self, msg: Message) -> None:
-        """No incoming messages consumed by this agent."""
+        """Handle incoming route plans and preemption revocations from the bus."""
+        from clearpath.bus.messages import RevokePreemption, RoutePlan
+        if isinstance(msg, RoutePlan):
+            self._routes[msg.vehicle_id] = list(msg.path_nodes)
+        elif isinstance(msg, RevokePreemption):
+            self._routes.pop(msg.vehicle_id, None)
 
     def step(self, world_view: Any, t: int) -> None:
         """Execute one tick of guidance logic.
@@ -182,19 +189,24 @@ class GuidanceAgent(Agent):
         amb_speed:  float           = float(ambulance.speed_mps)
 
         # ── 2. Determine route head (next node) ───────────────────────────────
-        # The ambulance vehicle carries a `route` attribute in the simulator but
-        # WorldView snapshots do not expose it.  We reconstruct the next edge
-        # from the full vehicle list by finding the ambulance Vehicle object in
-        # the actuator's vehicles dict when available, otherwise we skip next-
-        # edge scanning.
+        # Next edge is determined from RoutePlan messages received via the message
+        # bus. If not found on bus, fall back to actuator for test shims.
         next_edge: Optional[Tuple[str, str]] = None
         edge_len: float = 0.0
         if self.network is not None and self.network.graph.has_edge(*amb_edge):
-            edge_len = float(self.network.graph[amb_edge[0]][amb_edge[1]]["length_m"])
-            # Try to read ambulance route from the actuator (Simulator)
-            if self.actuator is not None:
+            edge_len = float(getattr(self.network, "_edge_lengths", {}).get(amb_edge, self.network.graph[amb_edge[0]][amb_edge[1]]["length_m"]))
+            # 1. Look up route from RoutePlan message received via bus
+            route = self._routes.get(ambulance.id)
+            if route and amb_edge[1] in route:
+                idx = route.index(amb_edge[1])
+                if idx + 1 < len(route):
+                    candidate = (amb_edge[1], route[idx + 1])
+                    if self.network.graph.has_edge(*candidate):
+                        next_edge = candidate
+            # 2. Standalone unit test actuator mock fallback
+            if next_edge is None and self.actuator is not None and hasattr(self.actuator, "vehicles"):
                 amb_veh = getattr(self.actuator, "vehicles", {}).get(ambulance.id)
-                if amb_veh is not None and amb_veh.route:
+                if amb_veh is not None and getattr(amb_veh, "route", None):
                     next_node = amb_veh.route[0]
                     candidate = (amb_edge[1], next_node)
                     if self.network.graph.has_edge(*candidate):

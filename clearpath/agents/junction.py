@@ -84,6 +84,8 @@ class JunctionAgent(Agent):
         config: SimConfig,
         network: RoadNetwork,
         actuators: Any,
+        policy: str = "rule",
+        rl_model: Optional[Any] = None,
     ) -> None:
         """Initialize the junction with no reservation, override or negotiation.
 
@@ -94,11 +96,27 @@ class JunctionAgent(Agent):
             network: Road graph used to derive phases and cross-street speeds.
             actuators: Object exposing ``set_signal_override(junction_id, phase,
                 reason)`` and ``clear_signal_override(junction_id)``.
+            policy: Signal policy mode: ``"rule"`` (default) or ``"rl"``.
+            rl_model: Optional trained RL policy model for ``"rl"`` mode.
         """
         super().__init__(node_id, bus)
         self.config = config
         self.network = network
         self.actuators = actuators
+        self.policy = policy
+        self.rl_model = rl_model
+        if self.policy == "rl" and self.rl_model is None:
+            try:
+                from pathlib import Path
+                from clearpath.rl.train import SharedJunctionPolicy
+                default_path = Path(__file__).resolve().parent.parent / "rl" / "models" / "junction_policy.npz"
+                if default_path.exists():
+                    self.rl_model = SharedJunctionPolicy(weights_path=default_path)
+                else:
+                    self.rl_model = SharedJunctionPolicy()
+            except Exception:
+                self.rl_model = None
+
         self.state: JunctionState = JunctionState.NORMAL
         self.event_log: List[Dict[str, Any]] = []
         self._reservation: Optional[Dict[str, Any]] = None
@@ -300,6 +318,10 @@ class JunctionAgent(Agent):
         if self._fail_safe_due(now):
             self._enter_recovery(now, "fail-safe: bus silent")
         self._observe_pass(world_view, now)
+        if self.policy == "rl":
+            self._step_rl(world_view, now)
+            return
+
         if self.state is JunctionState.NORMAL:
             self._plan_if_due(world_view, now)
             if self.state is JunctionState.NORMAL:
@@ -735,3 +757,119 @@ class JunctionAgent(Agent):
             nodes = self.network.graph.nodes
             return "NS" if nodes[u]["c"] == nodes[v]["c"] else "EW"
         return None
+
+    def _step_rl(self, world_view: Any, now: float) -> None:
+        """Advance junction control using the trained RL policy and safety masking."""
+        if self.rl_model is None:
+            return
+
+        # Check if held green should be released after vehicle passed
+        if self._release_at is not None and now >= self._release_at:
+            self.actuators.clear_signal_override(self.id)
+            self._release_at = None
+            self._reservation = None
+            self._hold_started = None
+            return
+
+        # Check max hold cap
+        if self._hold_started is not None and (now - self._hold_started) >= self.config.max_preemption_hold_s:
+            self.actuators.clear_signal_override(self.id)
+            self._hold_started = None
+
+        # Build local observation vector [11]
+        import numpy as np
+        queues = getattr(world_view, "queues", None) or {}
+        parts = self.id.split("_")
+        r, c = int(parts[1]), int(parts[2])
+
+        north_edge = (f"j_{r+1}_{c}", self.id)
+        south_edge = (f"j_{r-1}_{c}", self.id)
+        east_edge  = (f"j_{r}_{c+1}", self.id)
+        west_edge  = (f"j_{r}_{c-1}", self.id)
+
+        q_north = float(queues.get(north_edge, 0))
+        q_south = float(queues.get(south_edge, 0))
+        q_east  = float(queues.get(east_edge, 0))
+        q_west  = float(queues.get(west_edge, 0))
+
+        incoming_edges = {north_edge, south_edge, east_edge, west_edge}
+        max_wait = 0.0
+        for veh in getattr(world_view, "vehicles", None) or []:
+            if veh.edge in incoming_edges and veh.is_stopped:
+                if veh.wait_time_s > max_wait:
+                    max_wait = float(veh.wait_time_s)
+
+        # Ambulance distance & ETA
+        amb_dist = 0.0
+        amb_eta = 0.0
+        amb_axis = None
+        amb_vehicle_id = self._reservation["vehicle_id"] if self._reservation else None
+        if amb_vehicle_id is None:
+            for veh in getattr(world_view, "vehicles", None) or []:
+                if str(getattr(veh, "kind", "")) == "ambulance":
+                    amb_vehicle_id = veh.id
+                    break
+
+        if amb_vehicle_id:
+            eta = self._estimate_eta(world_view, amb_vehicle_id, now)
+            if eta is not None:
+                amb_eta = max(0.0, eta - now)
+                amb_dist = amb_eta * self.config.ambulance_max_mps
+                # Determine approach axis
+                if self._reservation and "phase" in self._reservation:
+                    amb_axis = self._reservation["phase"]
+                else:
+                    snapshot = self._snapshot(world_view, amb_vehicle_id)
+                    if snapshot:
+                        path = self._paths.get(amb_vehicle_id)
+                        if path and self.id in path:
+                            idx = path.index(self.id)
+                            if idx > 0:
+                                prev = path[idx - 1]
+                                amb_axis = self._phase_for(f"{prev}_{self.id}")
+
+        phase_name = self._phase_name or "NS_GREEN"
+        phase_ns = 1.0 if "NS" in phase_name and ("GREEN" in phase_name or "YELLOW" in phase_name) else 0.0
+        phase_ew = 1.0 if "EW" in phase_name and ("GREEN" in phase_name or "YELLOW" in phase_name) else 0.0
+        is_clearance = 1.0 if ("YELLOW" in phase_name or "RED" in phase_name) else 0.0
+        elapsed = now - self._phase_since
+
+        obs = np.array([
+            q_north, q_south, q_east, q_west, max_wait,
+            amb_dist, amb_eta, phase_ns, phase_ew, is_clearance, elapsed
+        ], dtype=np.float32)
+
+        # Safety action masking
+        mask = np.zeros(4, dtype=bool)
+        if is_clearance > 0.5:
+            mask[0] = True  # Only HOLD during clearance
+        else:
+            max_hold = float(self.config.max_preemption_hold_s)
+            min_green = float(self.config.min_green_for_cross_s)
+            has_amb = amb_eta > 0.0 and amb_eta <= float(self.config.window_s)
+            emergency = amb_eta > 0.0 and amb_eta <= 10.0
+
+            if elapsed < max_hold:
+                mask[0] = True   # HOLD
+                mask[2] = True   # EXTEND
+            if elapsed >= min_green or emergency:
+                mask[1] = True   # SWITCH
+            if has_amb and amb_axis:
+                mask[3] = True   # PREEMPT_GREEN
+
+            if not np.any(mask):
+                mask[0] = True
+
+        action = self.rl_model.predict(obs, mask=mask)
+
+        # Apply action
+        if action == 1:  # SWITCH
+            cross = "EW" if phase_ns > 0.5 else "NS"
+            self.actuators.set_signal_override(self.id, cross, reason="rl_switch")
+            self._hold_started = now
+        elif action == 2:  # EXTEND
+            curr = "NS" if phase_ns > 0.5 else "EW"
+            self.actuators.set_signal_override(self.id, curr, reason="rl_extend")
+        elif action == 3 and amb_axis:  # PREEMPT_GREEN
+            self.actuators.set_signal_override(self.id, amb_axis, reason="rl_preempt")
+            self._hold_started = now
