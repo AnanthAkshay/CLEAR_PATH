@@ -7,8 +7,11 @@ traffic signal phase limits, security thresholds, and route planning weights.
 from __future__ import annotations
 
 import os
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
+
+DEV_DEFAULT_SECRET = "clearpath-dev-secret-key-12345"
 
 
 @dataclass(frozen=True)
@@ -105,6 +108,17 @@ class SimConfig:
     position_tolerance_m: float = 30.0
     risk_weight_heading: float = 1.0
     rate_limit_per_vehicle_per_min: int = 6
+    max_replay_cache_size: int = 10000
+
+    def __post_init__(self) -> None:
+        """Trigger loud security warning if dev default secret is in use."""
+        if self.hmac_secret == DEV_DEFAULT_SECRET:
+            warnings.warn(
+                "SECURITY WARNING: Using insecure development default HMAC secret! "
+                "Set CLEARPATH_SECRET environment variable in production.",
+                UserWarning,
+                stacklevel=2,
+            )
 
 
 def load_config(**overrides: Any) -> SimConfig:
