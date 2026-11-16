@@ -47,6 +47,9 @@ class RoadNetwork:
         self.hospitals: Dict[str, Dict[str, Any]] = {}
         self.hospital_nodes: Set[str] = set()
         self.boundary_nodes: List[str] = []
+        self._edge_lengths: Dict[Tuple[str, str], float] = {}
+        self._edge_bearings: Dict[Tuple[str, str], float] = {}
+        self._edge_coords: Dict[Tuple[str, str], Tuple[float, float, float, float, float]] = {}
 
         if hospitals_path is None:
             hospitals_path = Path(__file__).resolve().parent.parent / "data" / "hospitals.json"
@@ -167,8 +170,26 @@ class RoadNetwork:
                     corridor=f"col_{c}",
                 )
 
+        # Precompute static edge metadata for O(1) high-frequency simulation lookups
+        for u, v, d in self.graph.edges(data=True):
+            edge = (u, v)
+            u_node = self.graph.nodes[u]
+            v_node = self.graph.nodes[v]
+            ux = float(u_node["x"])
+            uy = float(u_node["y"])
+            vx = float(v_node["x"])
+            vy = float(v_node["y"])
+            length = float(d["length_m"])
+            bearing = float(d["bearing_deg"])
+            self._edge_lengths[edge] = length
+            self._edge_bearings[edge] = bearing
+            self._edge_coords[edge] = (ux, uy, vx - ux, vy - uy, length)
+
     def edge_bearing(self, u: str, v: str) -> float:
         """Return the compass bearing in degrees from node u to node v."""
+        b = self._edge_bearings.get((u, v))
+        if b is not None:
+            return b
         if self.graph.has_edge(u, v):
             return float(self.graph[u][v]["bearing_deg"])
         u_node = self.graph.nodes[u]
@@ -190,6 +211,12 @@ class RoadNetwork:
 
     def edge_position(self, edge: Tuple[str, str], offset_m: float) -> Tuple[float, float]:
         """Interpolate (x, y) position on an edge given offset distance from start node."""
+        coords = self._edge_coords.get(edge)
+        if coords is not None:
+            ux, uy, dx, dy, length = coords
+            ratio = 0.0 if length <= 0.0 else max(0.0, min(1.0, offset_m / length))
+            return round(ux + ratio * dx, 2), round(uy + ratio * dy, 2)
+
         u, v = edge
         u_data = self.graph.nodes[u]
         v_data = self.graph.nodes[v]

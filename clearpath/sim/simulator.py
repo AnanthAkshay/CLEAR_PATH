@@ -265,12 +265,9 @@ class Simulator:
                             next_edge = (v, next_node)
                             next_lanes = self.network.graph[v][next_node].get("lanes", 1)
                             target_lane = min(veh.lane, next_lanes - 1)
-                            min_downstream = min(
-                                (
-                                    ov.offset_m for ov in self.vehicles.values()
-                                    if ov.edge == next_edge and ov.lane == target_lane
-                                ),
-                                default=float("inf"),
+                            downstream_list = lane_map.get((next_edge, target_lane))
+                            min_downstream = (
+                                downstream_list[-1].offset_m if downstream_list else float("inf")
                             )
                             if min_downstream >= (veh.length_m + 3.0):
                                 can_enter = True
@@ -379,9 +376,9 @@ class Simulator:
         for veh in self.vehicles.values():
             edge_counts[veh.edge] += 1
             u, v = veh.edge
-            edge_len = float(self.network.graph[u][v]["length_m"])
+            edge_len = self.network._edge_lengths.get(veh.edge, 200.0)
             x, y = self.network.edge_position(veh.edge, veh.offset_m)
-            b_deg = self.network.edge_bearing(u, v)
+            b_deg = self.network._edge_bearings.get(veh.edge, 0.0)
 
             # Queue condition: speed < 1.0 m/s within 60 m of stop line
             dist_to_stop = edge_len - veh.offset_m

@@ -71,10 +71,6 @@ class _ActuatorProxy:
         self.engine = engine
         self.pending: List[Tuple[Any, ...]] = []
 
-    @property
-    def vehicles(self) -> Dict[str, Any]:
-        return self.sim.vehicles
-
     def set_signal_override(self, junction_id: str, phase: Any, reason: str = "") -> None:
         if self.engine.preemption_enabled:
             self.pending.append(("set", junction_id, phase, reason))
@@ -126,10 +122,14 @@ class ClearPathEngine:
         preemption_enabled: bool = True,
         demand_level: str = "med",
         baseline: Optional[MetricsCollector] = None,
+        junction_policy: str = "rule",
+        rl_model: Optional[Any] = None,
     ) -> None:
         self.config = config or load_config()
         self.preemption_enabled = preemption_enabled
         self.demand_level = demand_level
+        self.junction_policy = junction_policy
+        self.rl_model = rl_model
         self.current_tick: int = 0
 
         self._build(baseline)
@@ -159,7 +159,10 @@ class ClearPathEngine:
         )
         self.actuator = _ActuatorProxy(self.sim, self)
         self.junctions: Dict[str, JunctionAgent] = {
-            node: JunctionAgent(node, self.bus, cfg, self.sim.network, self.actuator)
+            node: JunctionAgent(
+                node, self.bus, cfg, self.sim.network, self.actuator,
+                policy=self.junction_policy, rl_model=self.rl_model,
+            )
             for node in self.sim.network.graph.nodes
         }
         self.guidance = GuidanceAgent(

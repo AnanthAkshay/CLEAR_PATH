@@ -111,6 +111,10 @@ class MetricsCollector:
         # ── security ─────────────────────────────────────────────────────────
         self.security_total_requests: int = 0
         self.security_blocked: int = 0
+        self.security_total_attacks: int = 0
+        self.security_blocked_attacks: int = 0
+        self.security_total_legitimate: int = 0
+        self.security_allowed_legitimate: int = 0
         self.security_false_accept: int = 0
         self.security_false_reject: int = 0
         self.security_reason_histogram: Counter = Counter()
@@ -245,10 +249,18 @@ class MetricsCollector:
             self.security_reason_histogram[r] += 1
 
         if ground_truth_valid is not None:
-            if allowed and not ground_truth_valid:
-                self.security_false_accept += 1
-            elif not allowed and ground_truth_valid:
-                self.security_false_reject += 1
+            if not ground_truth_valid:
+                self.security_total_attacks += 1
+                if not allowed:
+                    self.security_blocked_attacks += 1
+                else:
+                    self.security_false_accept += 1
+            else:
+                self.security_total_legitimate += 1
+                if not allowed:
+                    self.security_false_reject += 1
+                else:
+                    self.security_allowed_legitimate += 1
 
     def on_negotiation_message(self, msg_type: str) -> None:
         """Record one bus message relevant to junction negotiation."""
@@ -330,6 +342,18 @@ class MetricsCollector:
         return round(self.security_blocked / self.security_total_requests, 4)
 
     @property
+    def security_attack_block_rate(self) -> float:
+        if self.security_total_attacks == 0:
+            return self.security_block_rate
+        return round(self.security_blocked_attacks / self.security_total_attacks, 4)
+
+    @property
+    def security_false_positive_rate(self) -> float:
+        if self.security_total_legitimate == 0:
+            return 0.0
+        return round(self.security_false_reject / self.security_total_legitimate, 4)
+
+    @property
     def negotiation_avg_latency_s(self) -> float:
         return round(_safe_mean(self._negotiation_latencies), 3)
 
@@ -359,6 +383,11 @@ class MetricsCollector:
             "security_total_requests": self.security_total_requests,
             "security_blocked": self.security_blocked,
             "security_block_rate": self.security_block_rate,
+            "security_total_attacks": self.security_total_attacks,
+            "security_blocked_attacks": self.security_blocked_attacks,
+            "security_attack_block_rate": self.security_attack_block_rate,
+            "security_total_legitimate": self.security_total_legitimate,
+            "security_false_positive_rate": self.security_false_positive_rate,
             "security_false_accept": self.security_false_accept,
             "security_false_reject": self.security_false_reject,
             "security_reason_histogram": dict(self.security_reason_histogram),

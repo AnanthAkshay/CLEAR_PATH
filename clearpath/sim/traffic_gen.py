@@ -46,6 +46,13 @@ class TrafficGenerator:
         self.rng = rng or np.random.default_rng(config.seed)
         self._car_counter: int = 0
         self._rate_per_boundary: float = self.DEMAND_RATES.get(self.demand_level, 0.10)
+        # Precompute static shortest paths for all (origin, destination) pairs
+        try:
+            self._path_cache: Dict[str, Dict[str, List[str]]] = dict(
+                nx.all_pairs_dijkstra_path(self.network.graph, weight="free_flow_time_s")
+            )
+        except Exception:
+            self._path_cache = {}
 
     def set_demand_level(self, level: str) -> None:
         """Update traffic arrival demand intensity ('low', 'med', 'high')."""
@@ -85,15 +92,17 @@ class TrafficGenerator:
                 if dest == origin:
                     continue
 
-                try:
-                    path = nx.shortest_path(
-                        self.network.graph,
-                        origin,
-                        dest,
-                        weight="free_flow_time_s",
-                    )
-                except (nx.NetworkXNoPath, nx.NodeNotFound):
-                    continue
+                path = self._path_cache.get(origin, {}).get(dest)
+                if not path:
+                    try:
+                        path = nx.shortest_path(
+                            self.network.graph,
+                            origin,
+                            dest,
+                            weight="free_flow_time_s",
+                        )
+                    except (nx.NetworkXNoPath, nx.NodeNotFound):
+                        continue
 
                 if len(path) < 2:
                     continue
