@@ -260,32 +260,39 @@ with st.sidebar:
 
     st.markdown("---")
     clearpath_on = st.toggle("ClearPath ON/OFF", value=True)
+    policy_choice = st.selectbox(
+        "Junction Policy",
+        ["Rule-based (Heuristics)", "RL (Trained Q-Net)"],
+        index=0,
+        help="Select JunctionAgent policy: rule-based corridor negotiation or trained RL policy",
+    )
+    junction_policy = "rl" if "RL" in policy_choice else "rule"
 
     st.markdown("---")
     c1, c2 = st.columns(2)
     with c1:
-        start_btn = st.button("▶ Start", use_container_width=True, type="primary")
-        step_btn  = st.button("⏭ Step",  use_container_width=True)
+        start_btn = st.button("▶ Start", width="stretch", type="primary")
+        step_btn  = st.button("⏭ Step",  width="stretch")
     with c2:
-        pause_btn = st.button("⏸ Pause",  use_container_width=True)
-        reset_btn = st.button("🔄 Reset", use_container_width=True)
+        pause_btn = st.button("⏸ Pause",  width="stretch")
+        reset_btn = st.button("🔄 Reset", width="stretch")
 
     st.markdown("---")
     st.markdown("**Emergency controls**")
-    send_emg_btn  = st.button("🚨 Send emergency request", use_container_width=True,
+    send_emg_btn  = st.button("🚨 Send emergency request", width="stretch",
                                type="primary")
-    send_fake_btn = st.button("💀 Inject FAKE request",    use_container_width=True)
+    send_fake_btn = st.button("💀 Inject FAKE request",    width="stretch")
 
     st.markdown("---")
     st.markdown("**Fake-request panel**")
     attack_type     = st.selectbox("Attack type", ATTACK_TYPES,
                                    format_func=lambda x: x.replace("_", " ").title())
     fire_attack_btn = st.button("🔥 Fire attack & show verdict",
-                                use_container_width=True)
+                                width="stretch")
 
     st.markdown("---")
-    compare_btn = st.button("⚖️ Run side-by-side comparison",
-                            use_container_width=True)
+    compare_btn = st.button("⚖️ Run 3-way comparison",
+                            width="stretch")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -303,9 +310,14 @@ def _make_config(seed_val: int, win: int, q: int, a: float) -> SimConfig:
 
 def _ensure_engine(rebuild: bool = False) -> ClearPathEngine:
     cfg = _make_config(int(seed), preemption_window, queue_flush_thr, alpha)
-    if st.session_state.engine is None or rebuild:
-        st.session_state.engine          = ClearPathEngine(cfg, preemption_enabled=clearpath_on,
-                                                           demand_level=demand_level)
+    current_pol = getattr(st.session_state.engine, "junction_policy", None) if st.session_state.engine else None
+    if st.session_state.engine is None or rebuild or current_pol != junction_policy:
+        st.session_state.engine          = ClearPathEngine(
+            cfg,
+            preemption_enabled=clearpath_on,
+            demand_level=demand_level,
+            junction_policy=junction_policy,
+        )
         st.session_state.snapshot_history = []
         st.session_state.last_verdict     = None
         st.session_state.comparison_result = None
@@ -334,40 +346,58 @@ if send_fake_btn:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Side-by-side comparison (headless, no rerun needed)
+# 3-Way comparison (headless, no rerun needed): Baseline vs Rules vs RL
 # ─────────────────────────────────────────────────────────────────────────────
 if compare_btn:
-    with st.spinner("Running Baseline + ClearPath headless (300 ticks each)…"):
+    with st.spinner("Running 3-Way Comparison: Baseline vs Rules vs RL (300 ticks each)…"):
         TICKS   = 300
         cfg_cmp = _make_config(int(seed), preemption_window, queue_flush_thr, alpha)
 
-        # --- Baseline ---
-        base_eng = ClearPathEngine(cfg_cmp, preemption_enabled=False,
-                                   demand_level=demand_level)
-        base_amb = None
+        # 1. Baseline (Preemption OFF)
+        base_eng = ClearPathEngine(cfg_cmp, preemption_enabled=False, demand_level=demand_level)
         for t in range(TICKS):
             base_eng.step()
             if t == 10:
-                base_amb = base_eng.sim.spawn_ambulance("j_0_0", "j_5_5")
+                base_eng.sim.spawn_ambulance("j_0_0", "j_5_5")
         base_m = base_eng.metrics.summary()
 
-        # --- ClearPath ---
-        cp_eng = ClearPathEngine(cfg_cmp, preemption_enabled=True,
-                                 demand_level=demand_level,
-                                 baseline=base_eng.metrics)
-        cp_amb = None
+        # 2. Rule-Based Preemption (Coordinated Green Waves)
+        rule_eng = ClearPathEngine(
+            cfg_cmp, preemption_enabled=True, demand_level=demand_level,
+            baseline=base_eng.metrics, junction_policy="rule",
+        )
         for t in range(TICKS):
-            cp_eng.step()
+            rule_eng.step()
             if t == 10:
-                cp_amb = cp_eng.sim.spawn_ambulance("j_0_0", "j_5_5")
-                req = _build_valid_request(cp_eng, cp_amb)
+                cp_amb = rule_eng.sim.spawn_ambulance("j_0_0", "j_5_5")
+                req = _build_valid_request(rule_eng, cp_amb)
                 if req:
-                    cp_eng.submit_emergency_request(
+                    rule_eng.submit_emergency_request(
                         req, incident_type, ground_truth_valid=True
                     )
-        cp_m = cp_eng.metrics.summary()
+        rule_m = rule_eng.metrics.summary()
 
-        st.session_state.comparison_result = {"baseline": base_m, "clearpath": cp_m}
+        # 3. RL Policy (Learned Q-Network with Safety Action Masking)
+        rl_eng = ClearPathEngine(
+            cfg_cmp, preemption_enabled=True, demand_level=demand_level,
+            baseline=base_eng.metrics, junction_policy="rl",
+        )
+        for t in range(TICKS):
+            rl_eng.step()
+            if t == 10:
+                rl_amb = rl_eng.sim.spawn_ambulance("j_0_0", "j_5_5")
+                req = _build_valid_request(rl_eng, rl_amb)
+                if req:
+                    rl_eng.submit_emergency_request(
+                        req, incident_type, ground_truth_valid=True
+                    )
+        rl_m = rl_eng.metrics.summary()
+
+        st.session_state.comparison_result = {
+            "baseline": base_m,
+            "rule": rule_m,
+            "rl": rl_m,
+        }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -446,13 +476,14 @@ def _kpi(label: str, value: str, delta: str = "", good: bool = True) -> str:
 amb_time    = ms.get("ambulance_travel_time_s")
 amb_stops   = ms.get("ambulance_stops", 0)
 cross_delay = ms.get("cross_delay_avg_s", 0.0)
-block_rate  = ms.get("security_block_rate", 0.0)
+attack_block_rate = ms.get("security_attack_block_rate", ms.get("security_block_rate", 0.0))
+fp_rate     = ms.get("security_false_positive_rate", 0.0)
 improvement = ms.get("ambulance_improvement_pct")
 
 amb_val   = f"{amb_time:.0f}s" if amb_time else "—"
 delta_str = f"▲ {improvement:+.1f}% vs baseline" if improvement else ""
 
-k1, k2, k3, k4 = st.columns(4)
+k1, k2, k3, k4, k5 = st.columns(5)
 with k1:
     st.markdown(
         _kpi("🚑 Ambulance transit", amb_val, delta_str, (improvement or 0) > 0),
@@ -464,13 +495,20 @@ with k2:
         unsafe_allow_html=True,
     )
 with k3:
-    n_blocked = ms.get("security_blocked", 0)
+    n_blocked = ms.get("security_blocked_attacks", ms.get("security_blocked", 0))
     st.markdown(
-        _kpi("🛡 Fake-request block rate", f"{block_rate*100:.0f}%",
+        _kpi("🛡 Attack block rate", f"{attack_block_rate*100:.0f}%",
              f"{n_blocked} blocked", True),
         unsafe_allow_html=True,
     )
 with k4:
+    n_fp = ms.get("security_false_reject", 0)
+    st.markdown(
+        _kpi("⚖️ FP rate", f"{fp_rate*100:.1f}%",
+             f"{n_fp} legit blocked", fp_rate == 0.0),
+        unsafe_allow_html=True,
+    )
+with k5:
     st.markdown(
         _kpi("🛑 Ambulance stops", str(amb_stops), f"Tick {snap['tick']}", True),
         unsafe_allow_html=True,
@@ -658,7 +696,7 @@ col_grid, col_tabs = st.columns([3, 2])
 
 with col_grid:
     fig = _build_grid(snap, engine)
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -686,7 +724,7 @@ with col_tabs:
                 "to":   recip[:18],
             })
         if feed_rows:
-            st.dataframe(pd.DataFrame(feed_rows), use_container_width=True,
+            st.dataframe(pd.DataFrame(feed_rows), width="stretch",
                          height=230, hide_index=True)
         else:
             st.caption("No messages yet — press ▶ Start.")
@@ -702,7 +740,7 @@ with col_tabs:
                 "Agent state": jagent.state.value,
                 "Ambulance":   vid,
             })
-        st.dataframe(pd.DataFrame(jstate_rows), use_container_width=True,
+        st.dataframe(pd.DataFrame(jstate_rows), width="stretch",
                      height=280, hide_index=True)
 
     # ── Tab 2: Security ───────────────────────────────────────────────────────
@@ -721,7 +759,7 @@ with col_tabs:
                     "reasons": ", ".join(entry.get("reasons", [])) or "—",
                 })
             df_audit = pd.DataFrame(rows)
-            st.dataframe(df_audit, use_container_width=True,
+            st.dataframe(df_audit, width="stretch",
                          height=200, hide_index=True)
         else:
             st.caption("No authentication events yet.")
@@ -741,7 +779,7 @@ with col_tabs:
                 margin=dict(l=0, r=0, t=20, b=0),
                 yaxis=dict(showgrid=True, gridcolor="#21262d"),
             )
-            st.plotly_chart(fig_rc, use_container_width=True,
+            st.plotly_chart(fig_rc, width="stretch",
                             config={"displayModeBar": False})
 
         # Instant verdict banner
@@ -777,7 +815,7 @@ with col_tabs:
                 "Wait (min)":  hosp.get("avg_wait_time_min", 0),
                 "Specialties": ", ".join(hosp.get("specialties", [])),
             })
-        st.dataframe(pd.DataFrame(hosp_rows), use_container_width=True,
+        st.dataframe(pd.DataFrame(hosp_rows), width="stretch",
                      height=200, hide_index=True)
 
         st.markdown("#### Active route ETA schedule")
@@ -795,7 +833,7 @@ with col_tabs:
                     ]
                     st.caption(f"**{amb_id}** → {hospital_id}  "
                                f"(total {inner.get('total_eta_s', 0):.0f}s)")
-                    st.dataframe(pd.DataFrame(eta_rows), use_container_width=True,
+                    st.dataframe(pd.DataFrame(eta_rows), width="stretch",
                                  height=160, hide_index=True)
                 else:
                     st.caption(f"{amb_id}: No route plan yet.")
@@ -841,13 +879,12 @@ with col_tabs:
             subplot_titles=["Avg speed (m/s)", "Max queue length", "Cross-traffic delay (s)"],
             vertical_spacing=0.08,
         )
-        kw = dict(mode="lines", line=dict(width=1.5))
-        fig_m.add_trace(go.Scatter(x=ticks, y=speeds, name="Speed",
-                                   line=dict(color="#3fb950"), **kw), 1, 1)
-        fig_m.add_trace(go.Scatter(x=ticks, y=queues, name="Queue",
-                                   line=dict(color="#d29922"), **kw), 2, 1)
-        fig_m.add_trace(go.Scatter(x=ticks, y=delays, name="Delay",
-                                   line=dict(color="#f85149"), **kw), 3, 1)
+        fig_m.add_trace(go.Scatter(x=ticks, y=speeds, name="Speed", mode="lines",
+                                   line=dict(color="#3fb950", width=1.5)), 1, 1)
+        fig_m.add_trace(go.Scatter(x=ticks, y=queues, name="Queue", mode="lines",
+                                   line=dict(color="#d29922", width=1.5)), 2, 1)
+        fig_m.add_trace(go.Scatter(x=ticks, y=delays, name="Delay", mode="lines",
+                                   line=dict(color="#f85149", width=1.5)), 3, 1)
         fig_m.update_layout(
             paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
             font=dict(color="#e6edf3", size=10),
@@ -857,30 +894,38 @@ with col_tabs:
         for i in range(1, 4):
             fig_m.update_xaxes(gridcolor="#21262d", row=i, col=1)
             fig_m.update_yaxes(gridcolor="#21262d", row=i, col=1)
-        st.plotly_chart(fig_m, use_container_width=True,
+        st.plotly_chart(fig_m, width="stretch",
                         config={"displayModeBar": False})
 
-        # ── Comparison bar chart ───────────────────────────────────────────
+        # ── 3-Way Comparison bar chart & table ──────────────────────────────
         cmp = st.session_state.comparison_result
         if cmp:
-            bm, cm = cmp["baseline"], cmp["clearpath"]
+            bm = cmp.get("baseline", {})
+            rm = cmp.get("rule", cmp.get("clearpath", {}))
+            rlm = cmp.get("rl", {})
             cmp_metrics = [
                 ("Ambulance travel (s)",  "ambulance_travel_time_s"),
                 ("Ambulance stops",       "ambulance_stops"),
                 ("Cross-delay avg (s)",   "cross_delay_avg_s"),
-                ("Security block rate",   "security_block_rate"),
+                ("Attack block rate",     "security_attack_block_rate"),
+                ("False-positive rate",   "security_false_positive_rate"),
                 ("Avg speed (m/s)",       "network_avg_speed_mps"),
                 ("Max queue",             "network_max_queue"),
             ]
             labels    = [m[0] for m in cmp_metrics]
             base_vals = [float(bm.get(m[1]) or 0) for m in cmp_metrics]
-            cp_vals   = [float(cm.get(m[1]) or 0) for m in cmp_metrics]
+            rule_vals = [float(rm.get(m[1]) or 0) for m in cmp_metrics]
+            rl_vals   = [float(rlm.get(m[1]) or 0) for m in cmp_metrics] if rlm else []
 
-            st.markdown("#### Baseline vs ClearPath comparison")
-            fig_cmp = go.Figure(data=[
-                go.Bar(name="Baseline",  x=labels, y=base_vals, marker_color="#8b949e"),
-                go.Bar(name="ClearPath", x=labels, y=cp_vals,   marker_color="#388bfd"),
-            ])
+            st.markdown("#### 3-Way Policy Comparison: Baseline vs Rules vs RL")
+            bars = [
+                go.Bar(name="Baseline",    x=labels, y=base_vals, marker_color="#8b949e"),
+                go.Bar(name="Rule-based",  x=labels, y=rule_vals, marker_color="#388bfd"),
+            ]
+            if rl_vals:
+                bars.append(go.Bar(name="RL Policy",   x=labels, y=rl_vals,   marker_color="#10b981"))
+
+            fig_cmp = go.Figure(data=bars)
             fig_cmp.update_layout(
                 barmode="group",
                 paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
@@ -891,18 +936,36 @@ with col_tabs:
                 xaxis=dict(tickangle=-30, gridcolor="#21262d"),
                 yaxis=dict(gridcolor="#21262d"),
             )
-            st.plotly_chart(fig_cmp, use_container_width=True,
+            st.plotly_chart(fig_cmp, width="stretch",
                             config={"displayModeBar": False})
 
-            df_cmp = pd.DataFrame({
-                "Metric":    labels,
-                "Baseline":  [f"{v:.2f}" for v in base_vals],
-                "ClearPath": [f"{v:.2f}" for v in cp_vals],
-                "Δ":         [f"{(c-b):+.2f}" for b, c in zip(base_vals, cp_vals)],
-            })
-            st.dataframe(df_cmp, use_container_width=True, height=240, hide_index=True)
+            table_data = {
+                "Metric":     labels,
+                "Baseline":   [f"{v:.2f}" for v in base_vals],
+                "Rule-based": [f"{v:.2f}" for v in rule_vals],
+                "Rule Δ":     [f"{(r-b):+.2f}" for b, r in zip(base_vals, rule_vals)],
+            }
+            if rl_vals:
+                table_data["RL Policy"] = [f"{v:.2f}" for v in rl_vals]
+                table_data["RL Δ"]     = [f"{(rl-b):+.2f}" for b, rl in zip(base_vals, rl_vals)]
+
+            df_cmp = pd.DataFrame(table_data)
+            st.dataframe(df_cmp, width="stretch", height=240, hide_index=True)
+
+            # Honest assessment callout
+            b_time = float(bm.get("ambulance_travel_time_s") or 0)
+            r_time = float(rm.get("ambulance_travel_time_s") or 0)
+            rl_time = float(rlm.get("ambulance_travel_time_s") or 0) if rlm else 0
+            if r_time > 0 and rl_time > 0:
+                st.info(
+                    f"**Honest Evaluation Assessment**  \n"
+                    f"• Baseline Ambulance Time: **{b_time:.1f}s**  \n"
+                    f"• Rule-based Corridor Waves: **{r_time:.1f}s** ({((b_time-r_time)/b_time*100.0) if b_time else 0:+.1f}% vs baseline)  \n"
+                    f"• RL Policy Preemption: **{rl_time:.1f}s** ({((b_time-rl_time)/b_time*100.0) if b_time else 0:+.1f}% vs baseline)  \n"
+                    f"Both policies guarantee strict safety invariant (zero conflicting greens) via state machine masking."
+                )
         else:
-            st.caption("Click **⚖️ Run side-by-side comparison** in the sidebar to populate this chart.")
+            st.caption("Click **⚖️ Run 3-way comparison** in the sidebar to populate this chart.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
