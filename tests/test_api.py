@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 import pytest
 
 from clearpath.agents.tokens import issue_token
@@ -96,3 +98,19 @@ def test_emergency_endpoint(client: TestClient) -> None:
     assert data["authenticated"] is True
     assert data["auth"]["is_authenticated"] is True
     assert data["dispatch"]["dispatched"] is True
+
+
+def test_concurrent_step_calls_consistency() -> None:
+    create_engine(load_config(seed=42), preemption_enabled=True)
+
+    async def _run() -> None:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            tasks = [ac.post("/step?n=2") for _ in range(10)]
+            responses = await asyncio.gather(*tasks)
+            for res in responses:
+                assert res.status_code == 200
+
+    asyncio.run(_run())
+    client = TestClient(app)
+    state = client.get("/state").json()
+    assert state["tick"] == 20

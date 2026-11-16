@@ -7,6 +7,7 @@ preemption requests, and query live state without coupling to Python internals.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import logging
 from typing import Any, Dict, List, Optional
@@ -77,6 +78,15 @@ def _dispatch_to_dict(dispatch: Any) -> Optional[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 _engine: Optional[ClearPathEngine] = None
+_engine_lock: Optional[asyncio.Lock] = None
+
+
+def get_engine_lock() -> asyncio.Lock:
+    """Return (or lazily create) the concurrency lock for the engine."""
+    global _engine_lock
+    if _engine_lock is None:
+        _engine_lock = asyncio.Lock()
+    return _engine_lock
 
 
 def get_engine() -> ClearPathEngine:
@@ -104,8 +114,9 @@ def create_engine(
     Returns:
         The newly created :class:`ClearPathEngine` instance (also set globally).
     """
-    global _engine
+    global _engine, _engine_lock
     _engine = ClearPathEngine(config, preemption_enabled=preemption_enabled)
+    _engine_lock = asyncio.Lock()
     return _engine
 
 
@@ -220,18 +231,19 @@ def get_messages(
 
 
 @app.post("/step", summary="Advance simulation ticks")
-def step_simulation(
+async def step_simulation(
     n: int = Query(default=1, ge=1, le=1000, description="Number of ticks to advance"),
     engine: ClearPathEngine = Depends(get_engine),
 ) -> Dict[str, Any]:
     """Advance the simulation by *n* ticks and return the new world state."""
-    try:
-        for _ in range(n):
-            engine.step()
-        return engine.snapshot()
-    except Exception as exc:
-        logger.exception("Failed to advance simulation")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    async with get_engine_lock():
+        try:
+            for _ in range(n):
+                engine.step()
+            return engine.snapshot()
+        except Exception as exc:
+            logger.exception("Failed to advance simulation")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 # ------------------------------------------------------------------
@@ -240,17 +252,18 @@ def step_simulation(
 
 
 @app.post("/reset", summary="Reset the simulation engine")
-def reset_simulation(
+async def reset_simulation(
     seed: Optional[int] = Query(default=None, description="Optional RNG seed override"),
     engine: ClearPathEngine = Depends(get_engine),
 ) -> Dict[str, Any]:
     """Reset the simulation to its initial state, optionally with a new seed."""
-    try:
-        engine.reset(seed=seed)
-        return {"status": "reset", "seed": seed, "tick": engine.current_tick}
-    except Exception as exc:
-        logger.exception("Failed to reset simulation")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    async with get_engine_lock():
+        try:
+            engine.reset(seed=seed)
+            return {"status": "reset", "seed": seed, "tick": engine.current_tick}
+        except Exception as exc:
+            logger.exception("Failed to reset simulation")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 # ------------------------------------------------------------------
@@ -259,7 +272,7 @@ def reset_simulation(
 
 
 @app.post("/emergency", summary="Submit an emergency preemption request")
-def submit_emergency(
+async def submit_emergency(
     body: EmergencyRequestBody,
     engine: ClearPathEngine = Depends(get_engine),
 ) -> Dict[str, Any]:
@@ -268,39 +281,40 @@ def submit_emergency(
     Returns the security auth verdict and, when authenticated, the full
     dispatcher result including path nodes and per-junction ETAs.
     """
-    try:
-        telemetry = Telemetry(
-            x=body.telemetry.x,
-            y=body.telemetry.y,
-            speed_mps=body.telemetry.speed_mps,
-            accel_mps2=body.telemetry.accel_mps2,
-            heading_deg=body.telemetry.heading_deg,
-            edge_id=body.telemetry.edge_id,
-            lane=body.telemetry.lane,
-            vehicle_id=body.telemetry.vehicle_id,
-            sender=body.vehicle_id,
-            recipient="security",
-        )
-        request = PreemptionRequest(
-            vehicle_id=body.vehicle_id,
-            token=body.token,
-            nonce=body.nonce,
-            incident_loc=(body.incident_loc[0], body.incident_loc[1]),
-            severity=body.severity,
-            telemetry=telemetry,
-            sender=body.vehicle_id,
-            recipient="security",
-        )
-        result = engine.submit_emergency_request(request)
-        auth = result.get("auth")
-        dispatch = result.get("dispatch")
-        return {
-            "authenticated": result["authenticated"],
-            "auth": _msg_to_dict(auth) if auth is not None else None,
-            "dispatch": _dispatch_to_dict(dispatch) if dispatch is not None else None,
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.exception("Failed to process emergency request for %s", body.vehicle_id)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    async with get_engine_lock():
+        try:
+            telemetry = Telemetry(
+                x=body.telemetry.x,
+                y=body.telemetry.y,
+                speed_mps=body.telemetry.speed_mps,
+                accel_mps2=body.telemetry.accel_mps2,
+                heading_deg=body.telemetry.heading_deg,
+                edge_id=body.telemetry.edge_id,
+                lane=body.telemetry.lane,
+                vehicle_id=body.telemetry.vehicle_id,
+                sender=body.vehicle_id,
+                recipient="security",
+            )
+            request = PreemptionRequest(
+                vehicle_id=body.vehicle_id,
+                token=body.token,
+                nonce=body.nonce,
+                incident_loc=(body.incident_loc[0], body.incident_loc[1]),
+                severity=body.severity,
+                telemetry=telemetry,
+                sender=body.vehicle_id,
+                recipient="security",
+            )
+            result = engine.submit_emergency_request(request)
+            auth = result.get("auth")
+            dispatch = result.get("dispatch")
+            return {
+                "authenticated": result["authenticated"],
+                "auth": _msg_to_dict(auth) if auth is not None else None,
+                "dispatch": _dispatch_to_dict(dispatch) if dispatch is not None else None,
+            }
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.exception("Failed to process emergency request for %s", body.vehicle_id)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
