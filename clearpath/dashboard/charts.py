@@ -1,7 +1,10 @@
 """Plotly chart and grid figure builders for ClearPath dashboard.
 
-Builds responsive, high-contrast, theme-aware visualizations for the road network,
-live telemetry timeseries, security audit histograms, and policy comparisons.
+Strict editorial design:
+- Transparent paper & plot backgrounds
+- Hairline axes and grid lines
+- Signals paired with accessible G / Y / R text annotations
+- Zero drop shadows, zero gradients
 """
 
 from __future__ import annotations
@@ -14,7 +17,6 @@ from clearpath.config import SimConfig
 from clearpath.dashboard.theme import TOKENS
 from clearpath.engine.orchestrator import ClearPathEngine
 
-
 SIGNAL_PHASE_LABELS = {
     "NS_GREEN": "G (North-South)",
     "NS_YELLOW": "Y (North-South)",
@@ -25,12 +27,12 @@ SIGNAL_PHASE_LABELS = {
 }
 
 SIGNAL_COLORS = {
-    "NS_GREEN": "#3FB950",
-    "NS_YELLOW": "#D29922",
-    "EW_GREEN": "#3FB950",
-    "EW_YELLOW": "#D29922",
-    "ALL_RED_TO_EW": "#F85149",
-    "ALL_RED_TO_NS": "#F85149",
+    "NS_GREEN": "#2F9E55",
+    "NS_YELLOW": "#C99A1B",
+    "EW_GREEN": "#2F9E55",
+    "EW_YELLOW": "#C99A1B",
+    "ALL_RED_TO_EW": "#D6453A",
+    "ALL_RED_TO_NS": "#D6453A",
 }
 
 
@@ -54,7 +56,7 @@ def build_grid_figure(
 
     fig = go.Figure()
 
-    # 1. Road lines
+    # 1. Road lines (hairline)
     ex, ey = [], []
     for u, v in graph.edges():
         ux = graph.nodes[u]["x"]
@@ -69,7 +71,7 @@ def build_grid_figure(
             x=ex,
             y=ey,
             mode="lines",
-            line=dict(color=t["road_color"], width=3),
+            line=dict(color=t["road_color"], width=1.5),
             name="Road Network",
             hoverinfo="none",
         )
@@ -82,24 +84,12 @@ def build_grid_figure(
         if len(path) >= 2:
             rx = [graph.nodes[n]["x"] for n in path if n in graph.nodes]
             ry = [graph.nodes[n]["y"] for n in path if n in graph.nodes]
-            # Outer glow
             fig.add_trace(
                 go.Scatter(
                     x=rx,
                     y=ry,
                     mode="lines",
-                    line=dict(color="rgba(242, 140, 40, 0.25)", width=16),
-                    hoverinfo="none",
-                    showlegend=False,
-                )
-            )
-            # Core corridor
-            fig.add_trace(
-                go.Scatter(
-                    x=rx,
-                    y=ry,
-                    mode="lines",
-                    line=dict(color=t["ambulance"], width=6),
+                    line=dict(color=t["accent"], width=4),
                     name=f"Corridor ({amb_id})",
                     hoverinfo="none",
                 )
@@ -113,7 +103,7 @@ def build_grid_figure(
         nd = graph.nodes[node]
         x, y = float(nd["x"]), float(nd["y"])
         phase = snap["signals"].get(node, "NS_GREEN")
-        col = SIGNAL_COLORS.get(phase, "#3FB950")
+        col = SIGNAL_COLORS.get(phase, "#2F9E55")
 
         jagent = engine.junctions.get(node)
         jstate = jagent.state.value if jagent else "NORMAL"
@@ -122,7 +112,6 @@ def build_grid_figure(
             ring_x.append(x)
             ring_y.append(y)
 
-        # Accessible short label (G/Y/R)
         short_phase = "G" if "GREEN" in phase else ("Y" if "YELLOW" in phase else "R")
 
         jx.append(x)
@@ -132,10 +121,10 @@ def build_grid_figure(
         jhover.append(
             f"<b>Junction {node}</b><br>"
             f"Signal: <b>{SIGNAL_PHASE_LABELS.get(phase, phase)}</b><br>"
-            f"Corridor State: <b>{jstate}</b>"
+            f"Corridor Phase: <b>{jstate}</b>"
         )
 
-    # Preemption halo rings
+    # Preemption rings
     if ring_x:
         fig.add_trace(
             go.Scatter(
@@ -143,29 +132,29 @@ def build_grid_figure(
                 y=ring_y,
                 mode="markers",
                 marker=dict(
-                    size=34,
+                    size=26,
                     color="rgba(0,0,0,0)",
-                    line=dict(color=t["signal_yellow"], width=3),
+                    line=dict(color=t["signal_yellow"], width=1.5),
                 ),
-                name="Preempted Junction",
+                name="Preemption Ring",
                 hoverinfo="none",
             )
         )
 
-    # Junction markers with G/Y/R text for full accessibility
+    # Junction markers with G/Y/R text for accessibility
     fig.add_trace(
         go.Scatter(
             x=jx,
             y=jy,
             mode="markers+text",
             marker=dict(
-                size=16,
+                size=15,
                 color=jcolor,
-                line=dict(color=t["node_border"], width=1.5),
+                line=dict(color=t["surface"], width=1),
             ),
             text=jtext,
             textposition="middle center",
-            textfont=dict(color="#FFFFFF", size=8, family="Plus Jakarta Sans"),
+            textfont=dict(color="#FFFFFF", size=8, family="IBM Plex Mono"),
             name="Signals (G/Y/R)",
             customdata=jhover,
             hovertemplate="%{customdata}<extra></extra>",
@@ -187,23 +176,23 @@ def build_grid_figure(
             amb_x.append(x)
             amb_y.append(y)
             amb_h.append(
-                f"<b>🚑 Emergency Ambulance: {v['id']}</b><br>"
+                f"<b>Ambulance {v['id']}</b><br>"
                 f"Speed: {spd:.1f} m/s ({spd * 3.6:.0f} km/h)<br>"
-                f"Status: {'Stopped in Queue' if stopped else 'En Route (Active Preemption)'}"
+                f"Status: {'Stopped' if stopped else 'En Route'}"
             )
         else:
             if stopped:
                 col = t["signal_red"]
             else:
                 ratio = min(spd / max(cfg.arterial_mps, 1.0), 1.0)
-                col = t["accent_light"] if ratio > 0.6 else t["signal_yellow"]
+                col = t["signal_green"] if ratio > 0.5 else t["signal_yellow"]
             car_x.append(x)
             car_y.append(y)
             car_c.append(col)
             car_h.append(
-                f"<b>Civilian Vehicle {v['id']}</b><br>"
+                f"<b>Vehicle {v['id']}</b><br>"
                 f"Speed: {spd:.1f} m/s<br>"
-                f"Wait Time: {wt:.0f} s"
+                f"Wait: {wt:.0f} s"
             )
 
     if car_x:
@@ -213,17 +202,17 @@ def build_grid_figure(
                 y=car_y,
                 mode="markers",
                 marker=dict(
-                    size=6,
+                    size=5,
                     color=car_c,
-                    line=dict(color="rgba(0,0,0,0.15)", width=0.5),
+                    line=dict(color="rgba(0,0,0,0.2)", width=0.5),
                 ),
-                name="Traffic Vehicles",
+                name="Vehicles",
                 text=car_h,
                 hovertemplate="%{text}<extra></extra>",
             )
         )
 
-    # Ambulance star marker
+    # Ambulance marker
     if amb_x:
         fig.add_trace(
             go.Scatter(
@@ -231,15 +220,15 @@ def build_grid_figure(
                 y=amb_y,
                 mode="markers+text",
                 marker=dict(
-                    size=24,
-                    color=t["ambulance"],
+                    size=20,
+                    color=t["accent"],
                     symbol="star",
-                    line=dict(color="#FFFFFF", width=2.5),
+                    line=dict(color="#FFFFFF", width=1.5),
                 ),
-                text=["🚑"] * len(amb_x),
+                text=["AMB"] * len(amb_x),
                 textposition="top center",
-                textfont=dict(size=14),
-                name="Active Ambulance",
+                textfont=dict(size=10, family="IBM Plex Mono", color=t["accent"]),
+                name="Ambulance",
                 customdata=amb_h,
                 hovertemplate="%{customdata}<extra></extra>",
             )
@@ -258,14 +247,14 @@ def build_grid_figure(
                     y=[hy],
                     mode="markers+text",
                     marker=dict(
-                        size=20,
-                        color="#2B7DE9",
+                        size=16,
+                        color=t["ink"],
                         symbol="cross",
-                        line=dict(color="#FFFFFF", width=2),
+                        line=dict(color=t["surface"], width=1.5),
                     ),
-                    text=[f"🏥 {hosp.get('name', '')[:10]}\n({beds}b)"],
+                    text=[f"{hosp.get('name', '')[:10]} ({beds}b)"],
                     textposition="top right",
-                    textfont=dict(size=9, color=t["ink"], family="Plus Jakarta Sans"),
+                    textfont=dict(size=9, color=t["ink"], family="Public Sans"),
                     name=f"Hospital: {hosp.get('name', '')[:12]}",
                     hovertemplate=(
                         f"<b>{hosp.get('name', '')}</b><br>"
@@ -284,24 +273,24 @@ def build_grid_figure(
                     y=[loc[1]],
                     mode="markers+text",
                     marker=dict(
-                        size=18,
+                        size=14,
                         color=t["signal_red"],
                         symbol="x",
-                        line=dict(color="#FFFFFF", width=2),
+                        line=dict(color=t["surface"], width=1.5),
                     ),
-                    text=["📍 Incident"],
+                    text=["INCIDENT"],
                     textposition="bottom center",
-                    textfont=dict(size=9, color=t["signal_red"]),
+                    textfont=dict(size=9, color=t["signal_red"], family="IBM Plex Mono"),
                     name=f"Incident ({amb_id})",
-                    hovertemplate=f"<b>Incident Site</b><br>Vehicle: {amb_id}<extra></extra>",
+                    hovertemplate=f"<b>Incident Location</b><br>Vehicle: {amb_id}<extra></extra>",
                 )
             )
 
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=8, r=8, t=16, b=8),
-        height=540,
+        margin=dict(l=4, r=4, t=12, b=4),
+        height=500,
         showlegend=False,
         xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
         yaxis=dict(
@@ -339,8 +328,8 @@ def build_telemetry_figure(
         cols=1,
         shared_xaxes=True,
         subplot_titles=[
-            "Network Avg Speed (m/s)",
-            "Max Corridor Queue Length",
+            "Network Average Speed (m/s)",
+            "Max Approach Queue Length",
             "Cross-Traffic Delay (s)",
         ],
         vertical_spacing=0.10,
@@ -352,7 +341,7 @@ def build_telemetry_figure(
             y=speeds,
             name="Speed",
             mode="lines",
-            line=dict(color=t["accent"], width=2.5),
+            line=dict(color=t["signal_green"], width=1.5),
         ),
         row=1,
         col=1,
@@ -363,7 +352,7 @@ def build_telemetry_figure(
             y=queues,
             name="Queue",
             mode="lines",
-            line=dict(color=t["signal_yellow"], width=2.5),
+            line=dict(color=t["signal_yellow"], width=1.5),
         ),
         row=2,
         col=1,
@@ -374,7 +363,7 @@ def build_telemetry_figure(
             y=delays,
             name="Delay",
             mode="lines",
-            line=dict(color=t["signal_red"], width=2.5),
+            line=dict(color=t["signal_red"], width=1.5),
         ),
         row=3,
         col=1,
@@ -383,16 +372,15 @@ def build_telemetry_figure(
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color=t["ink_muted"], size=11, family="Plus Jakarta Sans"),
+        font=dict(color=t["muted"], size=11, family="Public Sans"),
         height=380,
         showlegend=False,
         margin=dict(l=10, r=10, t=30, b=10),
     )
 
-    grid_col = "rgba(255, 255, 255, 0.08)" if dark_mode else "rgba(0, 0, 0, 0.06)"
     for i in range(1, 4):
-        fig.update_xaxes(gridcolor=grid_col, row=i, col=1)
-        fig.update_yaxes(gridcolor=grid_col, row=i, col=1)
+        fig.update_xaxes(gridcolor=t["rule"], row=i, col=1)
+        fig.update_yaxes(gridcolor=t["rule"], row=i, col=1)
 
     return fig
 
@@ -415,21 +403,19 @@ def build_reason_figure(
             orientation="h",
             marker=dict(
                 color=t["signal_red"],
-                cornerradius=8,
             ),
             text=values,
             textposition="outside",
         )
     )
 
-    grid_col = "rgba(255, 255, 255, 0.08)" if dark_mode else "rgba(0, 0, 0, 0.06)"
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color=t["ink_muted"], size=11, family="Plus Jakarta Sans"),
+        font=dict(color=t["muted"], size=11, family="Public Sans"),
         height=180,
         margin=dict(l=10, r=20, t=10, b=10),
-        xaxis=dict(showgrid=True, gridcolor=grid_col),
+        xaxis=dict(showgrid=True, gridcolor=t["rule"]),
         yaxis=dict(showgrid=False),
     )
     return fig
@@ -467,15 +453,13 @@ def build_comparison_figure(
             name="Baseline",
             x=labels,
             y=base_vals,
-            marker_color=t["ink_light"],
-            cornerradius=6,
+            marker_color=t["muted"],
         ),
         go.Bar(
             name="Rule-based (Waves)",
             x=labels,
             y=rule_vals,
-            marker_color=t["route_blue"],
-            cornerradius=6,
+            marker_color=t["accent"],
         ),
     ]
     if rl_vals:
@@ -484,19 +468,16 @@ def build_comparison_figure(
                 name="RL Policy (Safety Masked)",
                 x=labels,
                 y=rl_vals,
-                marker_color=t["accent"],
-                cornerradius=6,
+                marker_color=t["signal_green"],
             )
         )
 
     fig = go.Figure(data=bars)
-    grid_col = "rgba(255, 255, 255, 0.08)" if dark_mode else "rgba(0, 0, 0, 0.06)"
-
     fig.update_layout(
         barmode="group",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color=t["ink"], size=11, family="Plus Jakarta Sans"),
+        font=dict(color=t["ink"], size=11, family="Public Sans"),
         height=320,
         legend=dict(
             orientation="h",
@@ -507,8 +488,7 @@ def build_comparison_figure(
             bgcolor="rgba(0,0,0,0)",
         ),
         margin=dict(l=10, r=10, t=30, b=20),
-        xaxis=dict(tickangle=-25, gridcolor=grid_col),
-        yaxis=dict(gridcolor=grid_col),
+        xaxis=dict(tickangle=-25, gridcolor=t["rule"]),
+        yaxis=dict(gridcolor=t["rule"]),
     )
     return fig
-
