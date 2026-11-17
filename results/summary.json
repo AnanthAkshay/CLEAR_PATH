@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-11-16 23:04:22",
+  "timestamp": "2026-11-17 17:52:22",
   "seed": 42,
   "demand": "low",
   "all_passed": true,
@@ -2867,7 +2867,7 @@
         ],
         "_request_result": {
           "authenticated": true,
-          "auth": "AuthResult(id='c03c9e4c-4857-4790-8a2a-af28b6125e64', ts=10.0, sender='security', recipient='ambulance', type='AuthResult', vehicle_id='AMB_1', is_authenticated=True, reasons=[], security_log='vehicle=AMB_1 allowed=True risk=0.00 accepted', risk_score=0.0)",
+          "auth": "AuthResult(id='eb53e714-f8f9-43c7-b08b-930aa7330123', ts=10.0, sender='security', recipient='ambulance', type='AuthResult', vehicle_id='AMB_1', is_authenticated=True, reasons=[], security_log='vehicle=AMB_1 allowed=True risk=0.00 accepted', risk_score=0.0)",
           "dispatch": {
             "vehicle_id": "AMB_1",
             "origin": "j_0_0",
@@ -3931,7 +3931,7 @@
         ],
         "_request_result": {
           "authenticated": true,
-          "auth": "AuthResult(id='2bca51f8-433f-4ec9-b899-19a9acc4a138', ts=10.0, sender='security', recipient='ambulance', type='AuthResult', vehicle_id='AMB_1', is_authenticated=True, reasons=[], security_log='vehicle=AMB_1 allowed=True risk=0.00 accepted', risk_score=0.0)",
+          "auth": "AuthResult(id='74b11a96-cc40-47e9-8c89-81da5647d018', ts=10.0, sender='security', recipient='ambulance', type='AuthResult', vehicle_id='AMB_1', is_authenticated=True, reasons=[], security_log='vehicle=AMB_1 allowed=True risk=0.00 accepted', risk_score=0.0)",
           "dispatch": {
             "vehicle_id": "AMB_1",
             "origin": "j_0_0",

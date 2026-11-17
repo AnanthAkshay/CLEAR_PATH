@@ -1,6 +1,6 @@
 # ClearPath-lite Benchmark Summary Report
 
-Generated: 2026-11-16 23:04:22  
+Generated: 2026-11-17 17:52:22  
 Seed: `42` | Demand: `low`
 
 ---
