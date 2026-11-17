@@ -114,3 +114,68 @@ def test_concurrent_step_calls_consistency() -> None:
     client = TestClient(app)
     state = client.get("/state").json()
     assert state["tick"] == 20
+
+
+def test_health_etag_and_caching(client: TestClient) -> None:
+    res1 = client.get("/health")
+    assert res1.status_code == 200
+    assert "ETag" in res1.headers
+    assert "Cache-Control" in res1.headers
+    etag = res1.headers["ETag"]
+
+    res2 = client.get("/health", headers={"If-None-Match": etag})
+    assert res2.status_code == 304
+
+
+def test_metrics_etag_and_caching(client: TestClient) -> None:
+    res1 = client.get("/metrics")
+    assert res1.status_code == 200
+    assert "ETag" in res1.headers
+    assert "Cache-Control" in res1.headers
+    etag = res1.headers["ETag"]
+
+    res2 = client.get("/metrics", headers={"If-None-Match": etag})
+    assert res2.status_code == 304
+
+
+def test_state_fields_filtering(client: TestClient) -> None:
+    res_full = client.get("/state")
+    assert res_full.status_code == 200
+    assert len(res_full.json().keys()) > 3
+
+    res_trimmed = client.get("/state?fields=tick,vehicles")
+    assert res_trimmed.status_code == 200
+    data = res_trimmed.json()
+    assert set(data.keys()) == {"tick", "vehicles"}
+
+
+def test_contact_endpoint_success(client: TestClient) -> None:
+    payload = {
+        "name": "Traffic Ops Chief",
+        "email": "ops@traffic.gov",
+        "message": "Inquiry regarding ClearPath pilot deployment.",
+        "utm_source": "newsletter",
+        "utm_campaign": "pilot2026",
+    }
+    res = client.post("/contact", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "ok"
+    assert "id" in data
+    assert "received_at" in data
+
+
+def test_contact_endpoint_validation_errors(client: TestClient) -> None:
+    # Invalid email
+    res1 = client.post("/contact", json={"name": "Alice", "email": "bad-email", "message": "Valid length message"})
+    assert res1.status_code == 422
+    errs = res1.json()["detail"]
+    assert any("email" in str(e["loc"]) for e in errs)
+
+    # Empty name
+    res2 = client.post("/contact", json={"name": "   ", "email": "alice@city.gov", "message": "Valid length message"})
+    assert res2.status_code == 422
+
+    # Short message
+    res3 = client.post("/contact", json={"name": "Bob", "email": "bob@city.gov", "message": "Hi"})
+    assert res3.status_code == 422

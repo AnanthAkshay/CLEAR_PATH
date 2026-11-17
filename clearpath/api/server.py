@@ -9,11 +9,20 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import hashlib
+import json
 import logging
+import os
+import re
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query
-from pydantic import BaseModel, Field
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from pydantic import BaseModel, Field, field_validator
 
 from clearpath.bus.messages import PreemptionRequest, Telemetry
 from clearpath.config import SimConfig, load_config
@@ -149,6 +158,46 @@ class EmergencyRequestBody(BaseModel):
     telemetry: TelemetryBody = Field(default_factory=TelemetryBody)
 
 
+_EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+class ContactRequestBody(BaseModel):
+    """Payload for POST /contact."""
+
+    name: str = Field(..., min_length=1, max_length=100)
+    email: str = Field(..., min_length=3, max_length=200)
+    message: str = Field(..., min_length=5, max_length=5000)
+    utm_source: Optional[str] = None
+    utm_medium: Optional[str] = None
+    utm_campaign: Optional[str] = None
+    utm_term: Optional[str] = None
+    utm_content: Optional[str] = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        s = v.strip()
+        if not s:
+            raise ValueError("Name cannot be blank")
+        return s
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        s = v.strip()
+        if not _EMAIL_REGEX.match(s):
+            raise ValueError("Invalid email address format")
+        return s
+
+    @field_validator("message")
+    @classmethod
+    def validate_message(cls, v: str) -> str:
+        s = v.strip()
+        if len(s) < 5:
+            raise ValueError("Message must be at least 5 characters long")
+        return s
+
+
 # ---------------------------------------------------------------------------
 # FastAPI application
 # ---------------------------------------------------------------------------
@@ -159,6 +208,22 @@ app = FastAPI(
     version="0.2.0",
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:4173",
+        "http://127.0.0.1:4173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.add_middleware(GZipMiddleware, minimum_size=500)
+
 
 # ------------------------------------------------------------------
 # GET /health
@@ -166,13 +231,24 @@ app = FastAPI(
 
 
 @app.get("/health", summary="Service health check")
-def health_check(engine: ClearPathEngine = Depends(get_engine)) -> Dict[str, Any]:
+def health_check(
+    request: Request,
+    response: Response,
+    engine: ClearPathEngine = Depends(get_engine),
+) -> Any:
     """Return service liveness status and current simulation tick."""
-    return {
+    data = {
         "status": "ok",
         "service": "clearpath-lite",
         "tick": engine.current_tick,
     }
+    content = json.dumps(data, sort_keys=True)
+    etag = f'"{hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]}"'
+    response.headers["ETag"] = etag
+    response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "no-cache, must-revalidate"})
+    return data
 
 
 # ------------------------------------------------------------------
@@ -181,10 +257,17 @@ def health_check(engine: ClearPathEngine = Depends(get_engine)) -> Dict[str, Any
 
 
 @app.get("/state", summary="Full simulation state snapshot")
-def get_state(engine: ClearPathEngine = Depends(get_engine)) -> Dict[str, Any]:
+def get_state(
+    fields: Optional[str] = Query(default=None, description="Comma-separated fields to include"),
+    engine: ClearPathEngine = Depends(get_engine),
+) -> Dict[str, Any]:
     """Return a full JSON snapshot of the current simulation world state."""
     try:
-        return engine.snapshot()
+        snap = engine.snapshot()
+        if fields:
+            allowed_fields = {f.strip() for f in fields.split(",") if f.strip()}
+            return {k: v for k, v in snap.items() if k in allowed_fields}
+        return snap
     except Exception as exc:
         logger.exception("Failed to build state snapshot")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -196,10 +279,21 @@ def get_state(engine: ClearPathEngine = Depends(get_engine)) -> Dict[str, Any]:
 
 
 @app.get("/metrics", summary="Aggregated simulation metrics")
-def get_metrics(engine: ClearPathEngine = Depends(get_engine)) -> Dict[str, Any]:
+def get_metrics(
+    request: Request,
+    response: Response,
+    engine: ClearPathEngine = Depends(get_engine),
+) -> Any:
     """Return aggregated performance and throughput metrics."""
     try:
-        return engine.metrics.summary()
+        data = engine.metrics.summary()
+        content = json.dumps(data, sort_keys=True, default=str)
+        etag = f'"{hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]}"'
+        response.headers["ETag"] = etag
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "no-cache, must-revalidate"})
+        return data
     except Exception as exc:
         logger.exception("Failed to build metrics summary")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -318,3 +412,42 @@ async def submit_emergency(
         except Exception as exc:
             logger.exception("Failed to process emergency request for %s", body.vehicle_id)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ------------------------------------------------------------------
+# POST /contact
+# ------------------------------------------------------------------
+
+_ROOT_DIR = Path(__file__).resolve().parent.parent.parent
+_CONTACT_LOG = _ROOT_DIR / "data" / "contact.jsonl"
+
+
+@app.post("/contact", summary="Submit operator contact message")
+async def submit_contact(body: ContactRequestBody) -> Dict[str, Any]:
+    """Validate operator contact form submission and append to local log."""
+    try:
+        _CONTACT_LOG.parent.mkdir(parents=True, exist_ok=True)
+        submission_id = str(uuid.uuid4())
+        record = {
+            "id": submission_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "name": body.name,
+            "email": body.email,
+            "message": body.message,
+            "utm_source": body.utm_source,
+            "utm_medium": body.utm_medium,
+            "utm_campaign": body.utm_campaign,
+            "utm_term": body.utm_term,
+            "utm_content": body.utm_content,
+        }
+        with open(_CONTACT_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        return {
+            "status": "ok",
+            "id": submission_id,
+            "message": "Contact message recorded",
+            "received_at": record["timestamp"],
+        }
+    except Exception as exc:
+        logger.exception("Failed to record contact message")
+        raise HTTPException(status_code=500, detail="Internal server error") from exc

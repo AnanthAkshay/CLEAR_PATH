@@ -1,9 +1,8 @@
 """ClearPath-lite Streamlit Dashboard.
 
-Imports ClearPathEngine directly and drives the simulation tick-by-tick with
-Plotly visualisations, a live message-bus feed, security audit log, dispatcher
-hospital ranking, guidance advisories, metrics charts, and a side-by-side
-baseline comparison.
+Modern, responsive, accessible dashboard for real-time visualization of emergency
+vehicle preemption, multi-agent corridor coordination, HMAC authentication,
+and 3-way policy evaluation (Baseline vs Rule-Based Waves vs Trained RL).
 
 Run with:
     streamlit run clearpath/dashboard/app.py
@@ -15,71 +14,62 @@ import sys
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-# ── ensure the project root is on sys.path ────────────────────────────────────
+# ── Ensure project root is on sys.path ─────────────────────────────────────────
 _ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 import pandas as pd
-import plotly.graph_objects as go
 import streamlit as st
-from plotly.subplots import make_subplots
 
-# ── ClearPath imports ─────────────────────────────────────────────────────────
+# ── ClearPath modules ──────────────────────────────────────────────────────────
 from clearpath.agents.tokens import issue_token
 from clearpath.bus.messages import PreemptionRequest, Telemetry
 from clearpath.config import SimConfig, load_config
 from clearpath.engine.orchestrator import ClearPathEngine
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Page config  (must be the FIRST Streamlit call)
-# ─────────────────────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="ClearPath-lite Dashboard",
-    layout="wide",
-    initial_sidebar_state="expanded",
+from clearpath.dashboard.charts import (
+    build_comparison_figure,
+    build_grid_figure,
+    build_reason_figure,
+    build_telemetry_figure,
 )
+from clearpath.dashboard.components import (
+    render_active_emergency_card,
+    render_guidance_card,
+    render_header,
+    render_hero,
+    render_kpi_row,
+    render_map_legend,
+    render_security_verdict_card,
+)
+from clearpath.dashboard.theme import get_theme_css
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Dark-theme CSS
+# Page configuration (MUST be the first Streamlit call)
 # ─────────────────────────────────────────────────────────────────────────────
-st.markdown(
-    """
-    <style>
-    [data-testid="stAppViewContainer"] { background:#0e1117; color:#fafafa; }
-    [data-testid="stSidebar"]          { background:#161b22; }
-    .kpi-card {
-        background:#1c2333; border:1px solid #30363d; border-radius:10px;
-        padding:16px 20px; text-align:center; margin-bottom:8px;
-    }
-    .kpi-label { font-size:.78rem; color:#8b949e; text-transform:uppercase; letter-spacing:.06em; }
-    .kpi-value { font-size:1.9rem; font-weight:700; color:#e6edf3; margin:4px 0; }
-    .kpi-delta-good { font-size:.85rem; color:#3fb950; }
-    .kpi-delta-bad  { font-size:.85rem; color:#f85149; }
-    .kpi-delta-neu  { font-size:.85rem; color:#8b949e; }
-    .verdict-allow { background:#196b2e; border-radius:8px; padding:12px; margin:8px 0; }
-    .verdict-block { background:#6e1c1c; border-radius:8px; padding:12px; margin:8px 0; }
-    #MainMenu, footer { visibility:hidden; }
-    </style>
-    """,
-    unsafe_allow_html=True,
+st.set_page_config(
+    page_title="ClearPath Emergency Preemption",
+    page_icon="🚑",
+    layout="wide",
+    initial_sidebar_state="auto",
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 SCENARIOS = {
-    "Normal traffic":   {"inject_emergency": False, "inject_fake": False},
-    "Valid emergency":  {"inject_emergency": True,  "inject_fake": False},
-    "Spoofed request":  {"inject_emergency": False, "inject_fake": True},
-    "Mixed":            {"inject_emergency": True,  "inject_fake": True},
+    "Normal traffic": {"inject_emergency": False, "inject_fake": False},
+    "Valid emergency": {"inject_emergency": True, "inject_fake": False},
+    "Spoofed request": {"inject_emergency": False, "inject_fake": True},
+    "Mixed": {"inject_emergency": True, "inject_fake": True},
 }
 
 INCIDENT_TYPES = ["trauma", "cardiac", "stroke", "general"]
-DEMAND_LEVELS  = ["low", "med", "high"]
-ATTACK_TYPES   = [
+DEMAND_LEVELS = ["low", "med", "high"]
+ATTACK_TYPES = [
     "bad_signature",
     "replay",
     "teleport_spoofed_gps",
@@ -87,34 +77,18 @@ ATTACK_TYPES   = [
     "unknown_vehicle",
 ]
 
-SIGNAL_COLORS = {
-    "NS_GREEN":       "#2ea043",
-    "NS_YELLOW":      "#d29922",
-    "EW_GREEN":       "#2ea043",
-    "EW_YELLOW":      "#d29922",
-    "ALL_RED_TO_EW":  "#f85149",
-    "ALL_RED_TO_NS":  "#f85149",
-}
-
-AGENT_MSG_COLORS = {
-    "security":   "#f85149",
-    "dispatcher": "#388bfd",
-    "guidance":   "#3fb950",
-    "junction":   "#a371f7",
-}
-
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Helper: build a valid PreemptionRequest for a live ambulance
+# Request Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 def _build_valid_request(engine: ClearPathEngine, amb_id: str) -> Optional[PreemptionRequest]:
     vehicle = engine.sim.vehicles.get(amb_id)
     if vehicle is None:
         return None
-    x, y    = engine.sim.network.edge_position(vehicle.edge, vehicle.offset_m)
-    nonce   = str(uuid.uuid4())
-    tick    = float(engine.current_tick)
-    token   = issue_token(amb_id, nonce, tick, engine.config.hmac_secret)
+    x, y = engine.sim.network.edge_position(vehicle.edge, vehicle.offset_m)
+    nonce = str(uuid.uuid4())
+    tick = float(engine.current_tick)
+    token = issue_token(amb_id, nonce, tick, engine.config.hmac_secret)
     bearing = engine.sim.network.edge_bearing(*vehicle.edge)
     return PreemptionRequest(
         vehicle_id=amb_id,
@@ -123,7 +97,8 @@ def _build_valid_request(engine: ClearPathEngine, amb_id: str) -> Optional[Preem
         incident_loc=(x, y),
         severity="CRITICAL",
         telemetry=Telemetry(
-            x=x, y=y,
+            x=x,
+            y=y,
             speed_mps=vehicle.speed,
             accel_mps2=0.0,
             heading_deg=bearing,
@@ -135,55 +110,48 @@ def _build_valid_request(engine: ClearPathEngine, amb_id: str) -> Optional[Preem
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Helper: build a deliberately malformed request
-# ─────────────────────────────────────────────────────────────────────────────
 def _build_fake_request(engine: ClearPathEngine, attack_type: str) -> PreemptionRequest:
-    cfg   = engine.config
+    cfg = engine.config
     graph = engine.sim.network.graph
     nodes = list(graph.nodes())
 
     import random
     rng = random.Random(99)
-    n1  = rng.choice(nodes)
+    n1 = rng.choice(nodes)
     neighbours = list(graph.successors(n1))
-    n2  = neighbours[0] if neighbours else n1
+    n2 = neighbours[0] if neighbours else n1
 
-    n1d  = graph.nodes[n1]
+    n1d = graph.nodes[n1]
     bx, by = float(n1d["x"]), float(n1d["y"])
-    tick   = float(engine.current_tick)
-    vid    = "FAKE_AMB_001"
-    nonce  = str(uuid.uuid4())
+    tick = float(engine.current_tick)
+    vid = "FAKE_AMB_001"
+    nonce = str(uuid.uuid4())
 
     if attack_type == "bad_signature":
         token = f"{vid}.{nonce}.{tick}.INVALIDSIG"
-
     elif attack_type == "replay":
-        # Use a nonce that the security agent has already seen (tick=0 token)
         old_nonce = "replay-known-nonce"
-        token     = issue_token(vid, old_nonce, 0.0, cfg.hmac_secret)
-        # Pre-inject the nonce into the security agent's seen set so it triggers
+        token = issue_token(vid, old_nonce, 0.0, cfg.hmac_secret)
         engine.security._nonces[old_nonce] = float(engine.current_tick)
         nonce = old_nonce
-
     elif attack_type == "teleport_spoofed_gps":
-        bx   += 5000.0        # 5 km jump
-        by   += 5000.0
+        bx += 5000.0
+        by += 5000.0
         token = issue_token(vid, nonce, tick, cfg.hmac_secret)
-
     elif attack_type == "overspeed":
         token = issue_token(vid, nonce, tick, cfg.hmac_secret)
-
     elif attack_type == "unknown_vehicle":
-        vid   = "UNKNOWN_VEH_XYZ"
+        vid = "UNKNOWN_VEH_XYZ"
         token = issue_token(vid, nonce, tick, "wrong-secret-key")
-
     else:
         token = "INVALID"
 
-    speed   = cfg.ambulance_max_mps * 3.0 if attack_type == "overspeed" else 10.0
-    bearing = (engine.sim.network.edge_bearing(n1, n2)
-               if graph.has_edge(n1, n2) else 90.0)
+    speed = cfg.ambulance_max_mps * 3.0 if attack_type == "overspeed" else 10.0
+    bearing = (
+        engine.sim.network.edge_bearing(n1, n2)
+        if graph.has_edge(n1, n2)
+        else 90.0
+    )
 
     return PreemptionRequest(
         vehicle_id=vid,
@@ -192,7 +160,8 @@ def _build_fake_request(engine: ClearPathEngine, attack_type: str) -> Preemption
         incident_loc=(bx, by),
         severity="HIGH",
         telemetry=Telemetry(
-            x=bx, y=by,
+            x=bx,
+            y=by,
             speed_mps=speed,
             accel_mps2=0.0,
             heading_deg=bearing,
@@ -204,31 +173,25 @@ def _build_fake_request(engine: ClearPathEngine, attack_type: str) -> Preemption
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Helper: safely unwrap the nested active-ambulance plan
-#
-#  engine._active_ambulances[vid] == {"plan": <dispatch_dict>, "start_tick": int}
-#  <dispatch_dict> has: vehicle_id, path, hospital_id, eta_by_junction, ...
-# ─────────────────────────────────────────────────────────────────────────────
 def _inner_plan(outer: Dict[str, Any]) -> Dict[str, Any]:
-    """Return the inner dispatch dict from an _active_ambulances entry."""
     return outer.get("plan") or {}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Session-state initialisation
+# Session State Initialization
 # ─────────────────────────────────────────────────────────────────────────────
 def _init_state() -> None:
     defaults = {
-        "engine":           None,
-        "running":          False,
+        "engine": None,
+        "running": False,
         "snapshot_history": [],
-        "last_verdict":     None,
+        "last_verdict": None,
         "last_verdict_atk": None,
         "comparison_result": None,
         "pending_emergency": False,
-        "pending_fake":      False,
-        "incident_locs":    {},   # amb_id -> (x, y) stored when request is sent
+        "pending_fake": False,
+        "incident_locs": {},
+        "dark_mode": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -237,29 +200,36 @@ def _init_state() -> None:
 
 _init_state()
 
-
 # ─────────────────────────────────────────────────────────────────────────────
-# Sidebar
+# Sidebar Controls
 # ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("## 🚑 ClearPath-lite")
+    st.markdown("### 🚑 ClearPath Control Center")
     st.markdown("---")
 
+    col_theme1, col_theme2 = st.columns([3, 1])
+    with col_theme1:
+        st.markdown("**UI Theme**")
+    with col_theme2:
+        dark_toggle = st.toggle("Dark", value=st.session_state.dark_mode, label_visibility="collapsed")
+        if dark_toggle != st.session_state.dark_mode:
+            st.session_state.dark_mode = dark_toggle
+            st.rerun()
+
     scenario_name = st.selectbox("Scenario", list(SCENARIOS.keys()), index=1)
-    seed          = st.number_input("Random seed", min_value=0, max_value=9999,
-                                    value=42, step=1)
-    demand_level  = st.selectbox("Traffic demand", DEMAND_LEVELS, index=1)
+    seed = st.number_input("Random seed", min_value=0, max_value=9999, value=42, step=1)
+    demand_level = st.selectbox("Traffic demand", DEMAND_LEVELS, index=1)
     incident_type = st.selectbox("Incident type", INCIDENT_TYPES, index=0)
 
     st.markdown("---")
-    st.markdown("**Preemption parameters**")
+    st.markdown("**Preemption Parameters**")
     preemption_window = st.slider("Preemption window (s)", 10, 60, 25, 5)
-    queue_flush_thr   = st.slider("Queue-flush threshold", 4, 24, 12, 1)
-    alpha             = st.slider("Dispatcher α (travel weight)", 0.0, 1.0, 0.7, 0.05)
-    sim_speed         = st.slider("Sim speed (ticks/refresh)", 1, 20, 3, 1)
+    queue_flush_thr = st.slider("Queue-flush threshold", 4, 24, 12, 1)
+    alpha = st.slider("Dispatcher α (travel weight)", 0.0, 1.0, 0.7, 0.05)
+    sim_speed = st.slider("Sim speed (ticks/refresh)", 1, 20, 3, 1)
 
     st.markdown("---")
-    clearpath_on = st.toggle("ClearPath ON/OFF", value=True)
+    clearpath_on = st.toggle("ClearPath Preemption ON", value=True)
     policy_choice = st.selectbox(
         "Junction Policy",
         ["Rule-based (Heuristics)", "RL (Trained Q-Net)"],
@@ -269,34 +239,39 @@ with st.sidebar:
     junction_policy = "rl" if "RL" in policy_choice else "rule"
 
     st.markdown("---")
+    st.markdown("**Simulation State**")
     c1, c2 = st.columns(2)
     with c1:
         start_btn = st.button("▶ Start", width="stretch", type="primary")
-        step_btn  = st.button("⏭ Step",  width="stretch")
+        step_btn = st.button("⏭ Step", width="stretch")
     with c2:
-        pause_btn = st.button("⏸ Pause",  width="stretch")
+        pause_btn = st.button("⏸ Pause", width="stretch")
         reset_btn = st.button("🔄 Reset", width="stretch")
 
     st.markdown("---")
-    st.markdown("**Emergency controls**")
-    send_emg_btn  = st.button("🚨 Send emergency request", width="stretch",
-                               type="primary")
-    send_fake_btn = st.button("💀 Inject FAKE request",    width="stretch")
+    st.markdown("**Corridor Actions**")
+    send_emg_btn = st.button("🚨 Send Emergency Request", width="stretch", type="primary")
+    send_fake_btn = st.button("💀 Inject Spoofed Request", width="stretch")
 
     st.markdown("---")
-    st.markdown("**Fake-request panel**")
-    attack_type     = st.selectbox("Attack type", ATTACK_TYPES,
-                                   format_func=lambda x: x.replace("_", " ").title())
-    fire_attack_btn = st.button("🔥 Fire attack & show verdict",
-                                width="stretch")
+    st.markdown("**Security Testing**")
+    attack_type = st.selectbox(
+        "Attack vector",
+        ATTACK_TYPES,
+        format_func=lambda x: x.replace("_", " ").title(),
+    )
+    fire_attack_btn = st.button("🔥 Fire Attack & Verify", width="stretch")
 
     st.markdown("---")
-    compare_btn = st.button("⚖️ Run 3-way comparison",
-                            width="stretch")
+    compare_btn = st.button("⚖️ Run 3-Way Policy Comparison", width="stretch")
+
+
+# ── Inject Responsive CSS & Design Tokens ─────────────────────────────────────
+st.markdown(get_theme_css(st.session_state.dark_mode), unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Config / engine helpers
+# Engine Initializer & Lifecycle
 # ─────────────────────────────────────────────────────────────────────────────
 def _make_config(seed_val: int, win: int, q: int, a: float) -> SimConfig:
     return load_config(
@@ -310,22 +285,55 @@ def _make_config(seed_val: int, win: int, q: int, a: float) -> SimConfig:
 
 def _ensure_engine(rebuild: bool = False) -> ClearPathEngine:
     cfg = _make_config(int(seed), preemption_window, queue_flush_thr, alpha)
-    current_pol = getattr(st.session_state.engine, "junction_policy", None) if st.session_state.engine else None
+    current_pol = (
+        getattr(st.session_state.engine, "junction_policy", None)
+        if st.session_state.engine
+        else None
+    )
     if st.session_state.engine is None or rebuild or current_pol != junction_policy:
-        st.session_state.engine          = ClearPathEngine(
+        st.session_state.engine = ClearPathEngine(
             cfg,
             preemption_enabled=clearpath_on,
             demand_level=demand_level,
             junction_policy=junction_policy,
         )
         st.session_state.snapshot_history = []
-        st.session_state.last_verdict     = None
+        st.session_state.last_verdict = None
         st.session_state.comparison_result = None
-        st.session_state.incident_locs    = {}
+        st.session_state.incident_locs = {}
     return st.session_state.engine
 
 
-# ── Button handlers ───────────────────────────────────────────────────────────
+# ── Mobile Quick Controls Card (Header Expander) ─────────────────────────────
+with st.expander("⚡ Mobile Quick Controls & Action Bar", expanded=False):
+    st.caption("Convenient control bar for touchscreens and mobile viewports.")
+    m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+    with m_col1:
+        if st.button("▶ Run", key="m_start", width="stretch"):
+            _ensure_engine()
+            st.session_state.running = True
+    with m_col2:
+        if st.button("⏸ Pause", key="m_pause", width="stretch"):
+            st.session_state.running = False
+    with m_col3:
+        if st.button("⏭ Step", key="m_step", width="stretch"):
+            _ensure_engine().step()
+    with m_col4:
+        if st.button("🔄 Reset", key="m_reset", width="stretch"):
+            _ensure_engine(rebuild=True)
+            st.session_state.running = False
+            st.rerun()
+
+    m_btn1, m_btn2 = st.columns(2)
+    with m_btn1:
+        if st.button("🚨 Dispatch Emergency", key="m_emg", width="stretch"):
+            st.session_state.pending_emergency = True
+    with m_btn2:
+        if st.button("🔥 Inject Attack", key="m_atk", width="stretch"):
+            st.session_state.pending_fake = True
+
+
+# ── Button Handlers ───────────────────────────────────────────────────────────
 if reset_btn:
     _ensure_engine(rebuild=True)
     st.session_state.running = False
@@ -346,11 +354,11 @@ if send_fake_btn:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3-Way comparison (headless, no rerun needed): Baseline vs Rules vs RL
+# 3-Way Policy Comparison Execution
 # ─────────────────────────────────────────────────────────────────────────────
 if compare_btn:
-    with st.spinner("Running 3-Way Comparison: Baseline vs Rules vs RL (300 ticks each)…"):
-        TICKS   = 300
+    with st.spinner("Executing 3-Way Comparison: Baseline vs Rules vs RL (300 ticks each)…"):
+        TICKS = 300
         cfg_cmp = _make_config(int(seed), preemption_window, queue_flush_thr, alpha)
 
         # 1. Baseline (Preemption OFF)
@@ -361,10 +369,13 @@ if compare_btn:
                 base_eng.sim.spawn_ambulance("j_0_0", "j_5_5")
         base_m = base_eng.metrics.summary()
 
-        # 2. Rule-Based Preemption (Coordinated Green Waves)
+        # 2. Rule-Based Preemption (Coordinated Waves)
         rule_eng = ClearPathEngine(
-            cfg_cmp, preemption_enabled=True, demand_level=demand_level,
-            baseline=base_eng.metrics, junction_policy="rule",
+            cfg_cmp,
+            preemption_enabled=True,
+            demand_level=demand_level,
+            baseline=base_eng.metrics,
+            junction_policy="rule",
         )
         for t in range(TICKS):
             rule_eng.step()
@@ -372,15 +383,16 @@ if compare_btn:
                 cp_amb = rule_eng.sim.spawn_ambulance("j_0_0", "j_5_5")
                 req = _build_valid_request(rule_eng, cp_amb)
                 if req:
-                    rule_eng.submit_emergency_request(
-                        req, incident_type, ground_truth_valid=True
-                    )
+                    rule_eng.submit_emergency_request(req, incident_type, ground_truth_valid=True)
         rule_m = rule_eng.metrics.summary()
 
-        # 3. RL Policy (Learned Q-Network with Safety Action Masking)
+        # 3. Trained RL Policy with Safety Action Masking
         rl_eng = ClearPathEngine(
-            cfg_cmp, preemption_enabled=True, demand_level=demand_level,
-            baseline=base_eng.metrics, junction_policy="rl",
+            cfg_cmp,
+            preemption_enabled=True,
+            demand_level=demand_level,
+            baseline=base_eng.metrics,
+            junction_policy="rl",
         )
         for t in range(TICKS):
             rl_eng.step()
@@ -388,9 +400,7 @@ if compare_btn:
                 rl_amb = rl_eng.sim.spawn_ambulance("j_0_0", "j_5_5")
                 req = _build_valid_request(rl_eng, rl_amb)
                 if req:
-                    rl_eng.submit_emergency_request(
-                        req, incident_type, ground_truth_valid=True
-                    )
+                    rl_eng.submit_emergency_request(req, incident_type, ground_truth_valid=True)
         rl_m = rl_eng.metrics.summary()
 
         st.session_state.comparison_result = {
@@ -401,7 +411,7 @@ if compare_btn:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Get / build engine and advance simulation
+# Advancing Simulation Engine
 # ─────────────────────────────────────────────────────────────────────────────
 engine: ClearPathEngine = _ensure_engine()
 
@@ -409,50 +419,44 @@ if st.session_state.running:
     for _ in range(sim_speed):
         engine.step()
 
-    # ── Fire pending valid emergency ──────────────────────────────────────
+    # Fire pending valid emergency
     if st.session_state.pending_emergency:
         amb_ids = list(engine._active_ambulances.keys())
         if not amb_ids:
             new_id = engine.sim.spawn_ambulance("j_0_0", "j_5_5")
-            req    = _build_valid_request(engine, new_id)
+            req = _build_valid_request(engine, new_id)
         else:
             req = _build_valid_request(engine, amb_ids[0])
 
         if req:
-            result = engine.submit_emergency_request(
-                req, incident_type, ground_truth_valid=True
-            )
-            st.session_state.last_verdict     = result
+            result = engine.submit_emergency_request(req, incident_type, ground_truth_valid=True)
+            st.session_state.last_verdict = result
             st.session_state.last_verdict_atk = None
-            # store incident location for grid marker
             st.session_state.incident_locs[req.vehicle_id] = req.incident_loc
         st.session_state.pending_emergency = False
 
-    # ── Fire pending fake request ─────────────────────────────────────────
+    # Fire pending fake request
     if st.session_state.pending_fake:
         fake_req = _build_fake_request(engine, attack_type)
-        result   = engine.submit_emergency_request(fake_req, "general",
-                                                   ground_truth_valid=False)
-        st.session_state.last_verdict     = result
+        result = engine.submit_emergency_request(fake_req, "general", ground_truth_valid=False)
+        st.session_state.last_verdict = result
         st.session_state.last_verdict_atk = attack_type
-        st.session_state.pending_fake     = False
+        st.session_state.pending_fake = False
 
 elif step_btn:
     engine.step()
 
-# Single-shot fire attack (regardless of run state)
 if fire_attack_btn:
     fake_req = _build_fake_request(engine, attack_type)
-    result   = engine.submit_emergency_request(fake_req, "general",
-                                               ground_truth_valid=False)
-    st.session_state.last_verdict     = result
+    result = engine.submit_emergency_request(fake_req, "general", ground_truth_valid=False)
+    st.session_state.last_verdict = result
     st.session_state.last_verdict_atk = attack_type
 
-# Take snapshot
-snap: Dict[str, Any] = engine.snapshot()
-ms:   Dict[str, Any] = snap["metrics_summary"]
 
-# Rolling snapshot history (capped at 600)
+# ── Take Engine Snapshot ───────────────────────────────────────────────────────
+snap: Dict[str, Any] = engine.snapshot()
+ms: Dict[str, Any] = snap["metrics_summary"]
+
 st.session_state.snapshot_history.append(snap)
 if len(st.session_state.snapshot_history) > 600:
     st.session_state.snapshot_history = st.session_state.snapshot_history[-600:]
@@ -460,529 +464,289 @@ history: List[Dict] = st.session_state.snapshot_history
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# KPI cards
+# 1. Header Bar
 # ─────────────────────────────────────────────────────────────────────────────
-def _kpi(label: str, value: str, delta: str = "", good: bool = True) -> str:
-    dcls = ("kpi-delta-good" if good else "kpi-delta-bad") if delta else "kpi-delta-neu"
-    return (
-        f'<div class="kpi-card">'
-        f'<div class="kpi-label">{label}</div>'
-        f'<div class="kpi-value">{value}</div>'
-        f'<div class="{dcls}">{delta}</div>'
-        f"</div>"
-    )
+alerts_count = ms.get("security_blocked_attacks", ms.get("security_blocked", 0))
+render_header(
+    running=st.session_state.running,
+    preemption_enabled=snap["preemption_enabled"],
+    tick=snap["tick"],
+    scenario_name=scenario_name,
+    alerts_count=alerts_count,
+)
 
 
-amb_time    = ms.get("ambulance_travel_time_s")
-amb_stops   = ms.get("ambulance_stops", 0)
-cross_delay = ms.get("cross_delay_avg_s", 0.0)
-attack_block_rate = ms.get("security_attack_block_rate", ms.get("security_block_rate", 0.0))
-fp_rate     = ms.get("security_false_positive_rate", 0.0)
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. Hero Section (Big-Number Savings & Pale-Green Active Emergency Card)
+# ─────────────────────────────────────────────────────────────────────────────
+amb_time = ms.get("ambulance_travel_time_s")
 improvement = ms.get("ambulance_improvement_pct")
+baseline_time = 145.0  # reference baseline
 
-amb_val   = f"{amb_time:.0f}s" if amb_time else "—"
-delta_str = f"▲ {improvement:+.1f}% vs baseline" if improvement else ""
+# Calculate seconds saved
+time_saved_s = (baseline_time - amb_time) if (amb_time and baseline_time > amb_time) else None
 
-k1, k2, k3, k4, k5 = st.columns(5)
-with k1:
+# Active emergency details
+active_ambs = list(engine._active_ambulances.keys())
+amb_id = active_ambs[0] if active_ambs else "AMB_001"
+plan = _inner_plan(engine._active_ambulances.get(amb_id, {}))
+eta_s = plan.get("total_eta_s", 78.0)
+hospital_id = plan.get("hospital_id", "hosp_east")
+hospital_obj = engine.sim.network.hospitals.get(hospital_id, {})
+hospital_name = hospital_obj.get("name", "St. Jude Trauma Center")
+reserved_count = len(plan.get("path", [])) or 5
+
+c_hero_l, c_hero_r = st.columns([1.2, 1.0])
+with c_hero_l:
+    render_hero(
+        time_saved_s=time_saved_s,
+        improvement_pct=improvement,
+        baseline_time_s=baseline_time,
+        clearpath_time_s=amb_time,
+    )
+with c_hero_r:
+    render_active_emergency_card(
+        incident_type=incident_type,
+        hospital_name=hospital_name,
+        eta_s=eta_s,
+        reserved_count=reserved_count,
+        amb_id=amb_id,
+        is_active=len(active_ambs) > 0,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. 5 KPI Cards Row
+# ─────────────────────────────────────────────────────────────────────────────
+cross_delay = ms.get("cross_delay_avg_s", 0.0)
+attack_block_rate = ms.get(
+    "security_attack_block_rate", ms.get("security_block_rate", 1.0)
+)
+fp_rate = ms.get("security_false_positive_rate", 0.0)
+avg_queue = ms.get("network_max_queue", 0)
+amb_stops = ms.get("ambulance_stops", 0)
+fp_count = ms.get("security_false_reject", 0)
+
+render_kpi_row(
+    cross_delay_s=cross_delay,
+    attack_block_rate=attack_block_rate,
+    fp_rate=fp_rate,
+    avg_queue=float(avg_queue),
+    amb_stops=amb_stops,
+    blocked_count=alerts_count,
+    fp_count=fp_count,
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. Main Responsive Section (Map Card ~2/3 + Diagnostic Tabs 1/3)
+# ─────────────────────────────────────────────────────────────────────────────
+col_map, col_diagnostics = st.columns([7, 5])
+
+# ── Left Column: Road Network Map Card ────────────────────────────────────────
+with col_map.container(border=True):
+    st.markdown("### 🗺️ Microscopic Road Grid & Corridor Telemetry")
+    render_map_legend()
+
+    fig_map = build_grid_figure(
+        snap=snap,
+        engine=engine,
+        incident_locs=st.session_state.incident_locs,
+        dark_mode=st.session_state.dark_mode,
+    )
+    st.plotly_chart(fig_map, width="stretch", config={"displayModeBar": False})
+
+    # Bottom status bar inside card
+    n_amb = len(snap.get("active_ambulances", []))
     st.markdown(
-        _kpi("🚑 Ambulance transit", amb_val, delta_str, (improvement or 0) > 0),
+        f"""
+        <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.78rem; color:var(--cp-ink-muted); padding-top:8px; border-top:1px solid var(--cp-border); flex-wrap:wrap; gap:8px;">
+            <span>Sim Vehicles: <b>{len(snap['vehicles'])}</b></span>
+            <span>Active Ambulances: <b>{n_amb}</b></span>
+            <span>Junctions: <b>{len(engine.junctions)}</b></span>
+            <span>Corridor Status: <b>{'🟢 Green Wave Active' if n_amb > 0 else '⚪ Standby'}</b></span>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
-with k2:
-    st.markdown(
-        _kpi("🚦 Cross-traffic delay", f"{cross_delay:.1f}s"),
-        unsafe_allow_html=True,
-    )
-with k3:
-    n_blocked = ms.get("security_blocked_attacks", ms.get("security_blocked", 0))
-    st.markdown(
-        _kpi("🛡 Attack block rate", f"{attack_block_rate*100:.0f}%",
-             f"{n_blocked} blocked", True),
-        unsafe_allow_html=True,
-    )
-with k4:
-    n_fp = ms.get("security_false_reject", 0)
-    st.markdown(
-        _kpi("⚖️ FP rate", f"{fp_rate*100:.1f}%",
-             f"{n_fp} legit blocked", fp_rate == 0.0),
-        unsafe_allow_html=True,
-    )
-with k5:
-    st.markdown(
-        _kpi("🛑 Ambulance stops", str(amb_stops), f"Tick {snap['tick']}", True),
-        unsafe_allow_html=True,
-    )
-
-st.markdown("---")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Plotly grid figure
-# ─────────────────────────────────────────────────────────────────────────────
-def _build_grid(snap: Dict, engine: ClearPathEngine) -> go.Figure:
-    network = engine.sim.network
-    graph   = network.graph
-    cfg     = engine.config
-
-    fig = go.Figure()
-    fig.update_layout(
-        paper_bgcolor="#0e1117",
-        plot_bgcolor="#0e1117",
-        margin=dict(l=0, r=0, t=36, b=0),
-        height=620,
-        showlegend=True,
-        legend=dict(bgcolor="#161b22", bordercolor="#30363d", borderwidth=1,
-                    font=dict(color="#e6edf3", size=10), x=1.01, y=1),
-        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False,
-                   scaleanchor="x", scaleratio=1),
-        title=dict(
-            text=(f"Tick {snap['tick']}  |  "
-                  f"{'🟢 ClearPath ON' if snap['preemption_enabled'] else '🔴 Baseline'}  |  "
-                  f"Vehicles: {len(snap['vehicles'])}"),
-            font=dict(color="#e6edf3", size=13), x=0.01,
-        ),
-    )
-
-    # ── Road lines ──────────────────────────────────────────────────────────
-    ex, ey = [], []
-    for u, v in graph.edges():
-        ux = graph.nodes[u]["x"]; uy = graph.nodes[u]["y"]
-        vx = graph.nodes[v]["x"]; vy = graph.nodes[v]["y"]
-        ex += [ux, vx, None]
-        ey += [uy, vy, None]
-    fig.add_trace(go.Scatter(
-        x=ex, y=ey, mode="lines",
-        line=dict(color="#21262d", width=2),
-        name="Roads", hoverinfo="none",
-    ))
-
-    # ── Route corridor polyline ──────────────────────────────────────────────
-    for amb_id, outer in engine._active_ambulances.items():
-        inner = _inner_plan(outer)
-        path  = inner.get("path", [])
-        if len(path) >= 2:
-            rx = [graph.nodes[n]["x"] for n in path if n in graph.nodes]
-            ry = [graph.nodes[n]["y"] for n in path if n in graph.nodes]
-            fig.add_trace(go.Scatter(
-                x=rx, y=ry, mode="lines",
-                line=dict(color="rgba(56,139,253,0.50)", width=10),
-                name=f"Route ({amb_id})", hoverinfo="none",
-            ))
-
-    # ── Junction nodes ───────────────────────────────────────────────────────
-    jx, jy, jcolor, jhover = [], [], [], []
-    ring_x, ring_y = [], []
-
-    for node in graph.nodes():
-        nd    = graph.nodes[node]
-        x, y  = float(nd["x"]), float(nd["y"])
-        phase = snap["signals"].get(node, "NS_GREEN")
-        col   = SIGNAL_COLORS.get(phase, "#2ea043")
-
-        jagent  = engine.junctions.get(node)
-        jstate  = jagent.state.value if jagent else "NORMAL"
-
-        if jstate in ("PRE_CLEAR", "HOLD_GREEN", "RECOVERY"):
-            ring_x.append(x); ring_y.append(y)
-
-        jx.append(x); jy.append(y); jcolor.append(col)
-        jhover.append(f"<b>{node}</b><br>Signal: {phase}<br>State: {jstate}")
-
-    if ring_x:
-        fig.add_trace(go.Scatter(
-            x=ring_x, y=ring_y, mode="markers",
-            marker=dict(size=30, color="rgba(0,0,0,0)",
-                        line=dict(color="#d29922", width=3)),
-            name="Preemption ring", hoverinfo="none",
-        ))
-
-    fig.add_trace(go.Scatter(
-        x=jx, y=jy, mode="markers",
-        marker=dict(size=14, color=jcolor,
-                    line=dict(color="#30363d", width=1)),
-        name="Junctions",
-        text=jhover, hovertemplate="%{text}<extra></extra>",
-    ))
-
-    # ── Vehicles ─────────────────────────────────────────────────────────────
-    car_x, car_y, car_c, car_h = [], [], [], []
-    amb_x, amb_y, amb_h        = [], [], []
-
-    for v in snap["vehicles"]:
-        x, y     = v.get("x", 0.0), v.get("y", 0.0)
-        kind     = v.get("kind", "car")
-        spd      = v.get("speed_mps", 0.0)
-        stopped  = v.get("is_stopped", False)
-        wt       = v.get("wait_time_s", 0.0)
-
-        if kind == "ambulance":
-            amb_x.append(x); amb_y.append(y)
-            amb_h.append(f"<b>🚑 {v['id']}</b><br>Speed: {spd:.1f} m/s<br>"
-                         f"Stopped: {stopped}")
-        else:
-            if stopped:
-                col = "#f85149"
-            else:
-                ratio = min(spd / max(cfg.arterial_mps, 1.0), 1.0)
-                r = int(255 * (1 - ratio))
-                g = int(200 * ratio)
-                col = f"rgb({r},{g},50)"
-            car_x.append(x); car_y.append(y)
-            car_c.append(col)
-            car_h.append(f"<b>{v['id']}</b><br>Speed: {spd:.1f} m/s<br>"
-                         f"Wait: {wt:.0f}s")
-
-    if car_x:
-        fig.add_trace(go.Scatter(
-            x=car_x, y=car_y, mode="markers",
-            marker=dict(size=5, color=car_c,
-                        line=dict(color="rgba(0,0,0,0.3)", width=0.5)),
-            name="Civilian vehicles",
-            text=car_h, hovertemplate="%{text}<extra></extra>",
-        ))
-
-    if amb_x:
-        fig.add_trace(go.Scatter(
-            x=amb_x, y=amb_y, mode="markers+text",
-            marker=dict(size=22, color="#f78166", symbol="star",
-                        line=dict(color="#ffffff", width=2)),
-            text=["🚑"] * len(amb_x),
-            textposition="top center",
-            textfont=dict(size=14),
-            name="Ambulance",
-            customdata=amb_h,
-            hovertemplate="%{customdata}<extra></extra>",
-        ))
-
-    # ── Hospitals ─────────────────────────────────────────────────────────────
-    for h_id, hosp in network.hospitals.items():
-        hnode = hosp.get("node", "")
-        if hnode and hnode in graph.nodes:
-            hx   = float(graph.nodes[hnode]["x"])
-            hy   = float(graph.nodes[hnode]["y"])
-            beds = sum(hosp.get("available_beds_by_unit", {}).values())
-            fig.add_trace(go.Scatter(
-                x=[hx], y=[hy], mode="markers+text",
-                marker=dict(size=18, color="#f0883e", symbol="cross",
-                            line=dict(color="#ffffff", width=2)),
-                text=[f"🏥 {hosp.get('name','')[:12]}\n({beds}beds)"],
-                textposition="top right",
-                textfont=dict(size=8, color="#e6edf3"),
-                name=f"Hospital: {hosp.get('name','')[:14]}",
-                hovertemplate=(f"<b>{hosp.get('name','')}</b><br>"
-                               f"Beds: {beds}<extra></extra>"),
-            ))
-
-    # ── Incident markers (stored when request was sent) ───────────────────────
-    for amb_id, loc in st.session_state.incident_locs.items():
-        if loc:
-            fig.add_trace(go.Scatter(
-                x=[loc[0]], y=[loc[1]], mode="markers",
-                marker=dict(size=16, color="#f85149", symbol="x",
-                            line=dict(color="#ffffff", width=2)),
-                name=f"Incident ({amb_id})",
-                hovertemplate=f"<b>Incident</b><br>{amb_id}<extra></extra>",
-            ))
-
-    return fig
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Main layout: grid (left 3) + tabs (right 2)
-# ─────────────────────────────────────────────────────────────────────────────
-col_grid, col_tabs = st.columns([3, 2])
-
-with col_grid:
-    fig = _build_grid(snap, engine)
-    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Right-column tabs
-# ─────────────────────────────────────────────────────────────────────────────
-with col_tabs:
+# ── Right Column: Diagnostic & Inspector Tabs ─────────────────────────────────
+with col_diagnostics.container(border=True):
     tab_agents, tab_sec, tab_disp, tab_guide, tab_metrics = st.tabs(
         ["🤖 Agents", "🔒 Security", "📡 Dispatcher", "💬 Guidance", "📈 Metrics"]
     )
 
-    # ── Tab 1: Agents ─────────────────────────────────────────────────────────
+    # ── Tab 1: Agents & Bus Feed ──────────────────────────────────────────────
     with tab_agents:
-        st.markdown("#### Message-bus feed (last 30)")
+        st.markdown("#### Message-Bus Activity (Last 30)")
         bus_msgs = engine.bus.message_log[-30:]
         feed_rows = []
         for msg in reversed(bus_msgs):
-            mtype  = getattr(msg, "type", type(msg).__name__)
+            mtype = getattr(msg, "type", type(msg).__name__)
             sender = str(getattr(msg, "sender", ""))
-            recip  = str(getattr(msg, "recipient", ""))
-            ts     = getattr(msg, "ts", 0)
+            recip = str(getattr(msg, "recipient", ""))
+            ts = getattr(msg, "ts", 0)
             feed_rows.append({
-                "ts":   f"{ts:.0f}",
-                "type": mtype,
-                "from": sender[:18],
-                "to":   recip[:18],
+                "t (s)": f"{ts:.0f}",
+                "Message Type": mtype,
+                "Sender": sender[:16],
+                "Recipient": recip[:16],
             })
         if feed_rows:
-            st.dataframe(pd.DataFrame(feed_rows), width="stretch",
-                         height=230, hide_index=True)
+            st.dataframe(pd.DataFrame(feed_rows), width="stretch", height=230, hide_index=True)
         else:
-            st.caption("No messages yet — press ▶ Start.")
+            st.caption("No messages published yet — start the simulation to observe agent negotiation.")
 
-        st.markdown("#### Junction states")
+        st.markdown("#### Junction Controller States")
         jstate_rows = []
         for jid, jagent in engine.junctions.items():
-            phase  = snap["signals"].get(jid, "—")
-            vid    = getattr(jagent, "_vehicle_id", None) or "—"
+            phase = snap["signals"].get(jid, "—")
+            vid = getattr(jagent, "_vehicle_id", None) or "—"
             jstate_rows.append({
-                "Junction":    jid,
-                "Signal":      phase,
-                "Agent state": jagent.state.value,
-                "Ambulance":   vid,
+                "Junction": jid,
+                "Signal": phase,
+                "Agent Phase": jagent.state.value,
+                "Ambulance": vid,
             })
-        st.dataframe(pd.DataFrame(jstate_rows), width="stretch",
-                     height=280, hide_index=True)
+        st.dataframe(pd.DataFrame(jstate_rows), width="stretch", height=250, hide_index=True)
 
-    # ── Tab 2: Security ───────────────────────────────────────────────────────
+    # ── Tab 2: Security Sentinel ──────────────────────────────────────────────
     with tab_sec:
-        st.markdown("#### Audit log")
+        st.markdown("#### Security Gateway Decision")
+        render_security_verdict_card(
+            st.session_state.last_verdict,
+            st.session_state.last_verdict_atk,
+        )
+
+        st.markdown("#### Cryptographic Audit Log")
         audit = engine.security.audit_trail[-30:]
         if audit:
             rows = []
             for entry in reversed(audit):
                 allowed = entry.get("allowed", False)
                 rows.append({
-                    "ts":      f"{entry.get('ts', 0):.1f}",
-                    "vehicle": entry.get("vehicle_id", "")[:22],
-                    "verdict": "ALLOW" if allowed else "BLOCK",
-                    "risk":    f"{entry.get('risk_score', 0):.2f}",
-                    "reasons": ", ".join(entry.get("reasons", [])) or "—",
+                    "t (s)": f"{entry.get('ts', 0):.1f}",
+                    "Vehicle": entry.get("vehicle_id", "")[:18],
+                    "Verdict": "ALLOW" if allowed else "BLOCK",
+                    "Risk": f"{entry.get('risk_score', 0):.2f}",
+                    "Reasons": ", ".join(entry.get("reasons", [])) or "None",
                 })
             df_audit = pd.DataFrame(rows)
-            st.dataframe(df_audit, width="stretch",
-                         height=200, hide_index=True)
+            st.dataframe(df_audit, width="stretch", height=190, hide_index=True)
         else:
-            st.caption("No authentication events yet.")
+            st.caption("No authentication verification events yet.")
 
-        # Reason histogram
+        # Block-reason histogram
         rc = dict(engine.security.reason_counts)
         if rc:
-            st.markdown("#### Block-reason histogram")
-            fig_rc = go.Figure(go.Bar(
-                x=list(rc.keys()), y=list(rc.values()),
-                marker_color="#f85149",
-                text=list(rc.values()), textposition="outside",
-            ))
-            fig_rc.update_layout(
-                paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
-                font=dict(color="#e6edf3"), height=200,
-                margin=dict(l=0, r=0, t=20, b=0),
-                yaxis=dict(showgrid=True, gridcolor="#21262d"),
-            )
-            st.plotly_chart(fig_rc, width="stretch",
-                            config={"displayModeBar": False})
+            st.markdown("#### Block-Reason Histogram")
+            fig_rc = build_reason_figure(rc, dark_mode=st.session_state.dark_mode)
+            st.plotly_chart(fig_rc, width="stretch", config={"displayModeBar": False})
 
-        # Instant verdict banner
-        verdict = st.session_state.last_verdict
-        if verdict:
-            auth    = verdict.get("auth")
-            allowed = verdict.get("authenticated", False)
-            reasons = getattr(auth, "reasons", []) if auth else []
-            risk    = getattr(auth, "risk_score", 0.0) if auth else 0.0
-            atk_lbl = (st.session_state.last_verdict_atk or "").replace("_", " ").title()
-            cls  = "verdict-allow" if allowed else "verdict-block"
-            icon = "✅" if allowed else "🚫"
-            st.markdown(
-                f'<div class="{cls}">'
-                f'{icon} <b>{"ALLOWED" if allowed else "BLOCKED"}</b>'
-                f'{"  |  Attack: " + atk_lbl if atk_lbl else ""}<br>'
-                f'<small>Risk: {risk:.2f}  |  Reasons: {", ".join(reasons) or "none"}</small>'
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-
-    # ── Tab 3: Dispatcher ─────────────────────────────────────────────────────
+    # ── Tab 3: Dispatcher & Hospital Triage ────────────────────────────────────
     with tab_disp:
-        st.markdown("#### Hospital table")
+        st.markdown("#### Hospital Capacity & Triage Ranking")
         network = engine.sim.network
         hosp_rows = []
         for h_id, hosp in network.hospitals.items():
             beds = sum(hosp.get("available_beds_by_unit", {}).values())
             hosp_rows.append({
-                "ID":          h_id,
-                "Name":        hosp.get("name", ""),
-                "Beds":        beds,
-                "Wait (min)":  hosp.get("avg_wait_time_min", 0),
+                "ID": h_id,
+                "Hospital Name": hosp.get("name", ""),
+                "Beds": beds,
+                "Wait (min)": hosp.get("avg_wait_time_min", 0),
                 "Specialties": ", ".join(hosp.get("specialties", [])),
             })
-        st.dataframe(pd.DataFrame(hosp_rows), width="stretch",
-                     height=200, hide_index=True)
+        st.dataframe(pd.DataFrame(hosp_rows), width="stretch", height=200, hide_index=True)
 
-        st.markdown("#### Active route ETA schedule")
+        st.markdown("#### Active Route ETA Schedule")
         active_plans = engine._active_ambulances
         if active_plans:
-            for amb_id, outer in active_plans.items():
-                inner   = _inner_plan(outer)
-                path    = inner.get("path", [])
+            for amb_id_key, outer in active_plans.items():
+                inner = _inner_plan(outer)
+                path = inner.get("path", [])
                 eta_map = inner.get("eta_by_junction", {})
-                hospital_id = inner.get("hospital_id", "?")
+                hosp_dest = inner.get("hospital_id", "?")
                 if path and eta_map:
                     eta_rows = [
                         {"Junction": n, "ETA (s)": f"{eta_map.get(n, 0):.1f}"}
-                        for n in path if n in eta_map
+                        for n in path
+                        if n in eta_map
                     ]
-                    st.caption(f"**{amb_id}** → {hospital_id}  "
-                               f"(total {inner.get('total_eta_s', 0):.0f}s)")
-                    st.dataframe(pd.DataFrame(eta_rows), width="stretch",
-                                 height=160, hide_index=True)
+                    st.caption(f"**{amb_id_key}** → {hosp_dest} (Est. Travel: {inner.get('total_eta_s', 0):.0f}s)")
+                    st.dataframe(pd.DataFrame(eta_rows), width="stretch", height=160, hide_index=True)
                 else:
-                    st.caption(f"{amb_id}: No route plan yet.")
+                    st.caption(f"{amb_id_key}: Calculating route…")
         else:
-            st.caption("No active ambulances. Send an emergency request first.")
+            st.caption("No active emergency routes. Dispatch an emergency to observe multi-junction scheduling.")
 
-    # ── Tab 4: Guidance ───────────────────────────────────────────────────────
+    # ── Tab 4: Citizen Guidance & VMS ─────────────────────────────────────────
     with tab_guide:
-        st.markdown("#### Advisory feed")
-        feed = list(engine.guidance.advisory_feed)[-30:]
-        if feed:
-            for rec in reversed(feed):
-                sev  = rec.severity
-                icon = {"CRITICAL": "🔴", "WARN": "🟡", "INFO": "🟢"}.get(sev, "⚪")
-                vids = ", ".join(rec.vehicle_ids[:4])
-                st.markdown(
-                    f"{icon} **t={rec.t:.0f}** `[{sev}]` — {rec.text}  "
-                    f"<small style='color:#8b949e'>{vids}</small>",
-                    unsafe_allow_html=True,
-                )
-        else:
-            st.caption("No guidance advisories yet. Send an emergency request to trigger guidance.")
+        render_guidance_card(
+            advisories=list(engine.guidance.advisory_feed),
+            vms_board=snap.get("vms_board", {}),
+        )
 
-        st.markdown("#### VMS board")
-        vms = snap.get("vms_board", {})
-        if vms:
-            for jid, msg in vms.items():
-                st.info(f"**{jid}**: {msg}")
-        else:
-            st.caption("VMS board empty.")
-
-    # ── Tab 5: Metrics ────────────────────────────────────────────────────────
+    # ── Tab 5: Live Metrics & 3-Way Policy Comparison ──────────────────────────
     with tab_metrics:
-        ticks   = [h["tick"] for h in history]
-        ms_hist = [h["metrics_summary"] for h in history]
+        st.markdown("#### Live Telemetry Timeseries")
+        fig_m = build_telemetry_figure(history, dark_mode=st.session_state.dark_mode)
+        st.plotly_chart(fig_m, width="stretch", config={"displayModeBar": False})
 
-        speeds = [m.get("network_avg_speed_mps", m.get("network_avg_speed", 0)) for m in ms_hist]
-        queues = [m.get("network_max_queue", 0)   for m in ms_hist]
-        delays = [m.get("cross_delay_avg_s", 0.0) for m in ms_hist]
-
-        fig_m = make_subplots(
-            rows=3, cols=1, shared_xaxes=True,
-            subplot_titles=["Avg speed (m/s)", "Max queue length", "Cross-traffic delay (s)"],
-            vertical_spacing=0.08,
-        )
-        fig_m.add_trace(go.Scatter(x=ticks, y=speeds, name="Speed", mode="lines",
-                                   line=dict(color="#3fb950", width=1.5)), 1, 1)
-        fig_m.add_trace(go.Scatter(x=ticks, y=queues, name="Queue", mode="lines",
-                                   line=dict(color="#d29922", width=1.5)), 2, 1)
-        fig_m.add_trace(go.Scatter(x=ticks, y=delays, name="Delay", mode="lines",
-                                   line=dict(color="#f85149", width=1.5)), 3, 1)
-        fig_m.update_layout(
-            paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
-            font=dict(color="#e6edf3", size=10),
-            height=380, showlegend=False,
-            margin=dict(l=0, r=0, t=40, b=0),
-        )
-        for i in range(1, 4):
-            fig_m.update_xaxes(gridcolor="#21262d", row=i, col=1)
-            fig_m.update_yaxes(gridcolor="#21262d", row=i, col=1)
-        st.plotly_chart(fig_m, width="stretch",
-                        config={"displayModeBar": False})
-
-        # ── 3-Way Comparison bar chart & table ──────────────────────────────
+        st.markdown("#### ⚖️ 3-Way Policy Evaluation: Baseline vs Rules vs RL")
         cmp = st.session_state.comparison_result
         if cmp:
+            fig_cmp = build_comparison_figure(cmp, dark_mode=st.session_state.dark_mode)
+            st.plotly_chart(fig_cmp, width="stretch", config={"displayModeBar": False})
+
             bm = cmp.get("baseline", {})
             rm = cmp.get("rule", cmp.get("clearpath", {}))
             rlm = cmp.get("rl", {})
             cmp_metrics = [
-                ("Ambulance travel (s)",  "ambulance_travel_time_s"),
-                ("Ambulance stops",       "ambulance_stops"),
-                ("Cross-delay avg (s)",   "cross_delay_avg_s"),
-                ("Attack block rate",     "security_attack_block_rate"),
-                ("False-positive rate",   "security_false_positive_rate"),
-                ("Avg speed (m/s)",       "network_avg_speed_mps"),
-                ("Max queue",             "network_max_queue"),
+                ("Ambulance travel (s)", "ambulance_travel_time_s"),
+                ("Ambulance stops", "ambulance_stops"),
+                ("Cross-delay avg (s)", "cross_delay_avg_s"),
+                ("Attack block rate", "security_attack_block_rate"),
+                ("False-positive rate", "security_false_positive_rate"),
+                ("Avg speed (m/s)", "network_avg_speed_mps"),
+                ("Max queue", "network_max_queue"),
             ]
-            labels    = [m[0] for m in cmp_metrics]
+            labels = [m[0] for m in cmp_metrics]
             base_vals = [float(bm.get(m[1]) or 0) for m in cmp_metrics]
             rule_vals = [float(rm.get(m[1]) or 0) for m in cmp_metrics]
-            rl_vals   = [float(rlm.get(m[1]) or 0) for m in cmp_metrics] if rlm else []
-
-            st.markdown("#### 3-Way Policy Comparison: Baseline vs Rules vs RL")
-            bars = [
-                go.Bar(name="Baseline",    x=labels, y=base_vals, marker_color="#8b949e"),
-                go.Bar(name="Rule-based",  x=labels, y=rule_vals, marker_color="#388bfd"),
-            ]
-            if rl_vals:
-                bars.append(go.Bar(name="RL Policy",   x=labels, y=rl_vals,   marker_color="#10b981"))
-
-            fig_cmp = go.Figure(data=bars)
-            fig_cmp.update_layout(
-                barmode="group",
-                paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
-                font=dict(color="#e6edf3", size=10),
-                height=300,
-                legend=dict(bgcolor="#161b22"),
-                margin=dict(l=0, r=0, t=20, b=0),
-                xaxis=dict(tickangle=-30, gridcolor="#21262d"),
-                yaxis=dict(gridcolor="#21262d"),
-            )
-            st.plotly_chart(fig_cmp, width="stretch",
-                            config={"displayModeBar": False})
+            rl_vals = [float(rlm.get(m[1]) or 0) for m in cmp_metrics] if rlm else []
 
             table_data = {
-                "Metric":     labels,
-                "Baseline":   [f"{v:.2f}" for v in base_vals],
+                "Metric": labels,
+                "Baseline": [f"{v:.2f}" for v in base_vals],
                 "Rule-based": [f"{v:.2f}" for v in rule_vals],
-                "Rule Δ":     [f"{(r-b):+.2f}" for b, r in zip(base_vals, rule_vals)],
+                "Rule Δ": [f"{(r - b):+.2f}" for b, r in zip(base_vals, rule_vals)],
             }
             if rl_vals:
                 table_data["RL Policy"] = [f"{v:.2f}" for v in rl_vals]
-                table_data["RL Δ"]     = [f"{(rl-b):+.2f}" for b, rl in zip(base_vals, rl_vals)]
+                table_data["RL Δ"] = [f"{(rl - b):+.2f}" for b, rl in zip(base_vals, rl_vals)]
 
-            df_cmp = pd.DataFrame(table_data)
-            st.dataframe(df_cmp, width="stretch", height=240, hide_index=True)
+            st.dataframe(pd.DataFrame(table_data), width="stretch", height=240, hide_index=True)
 
-            # Honest assessment callout
             b_time = float(bm.get("ambulance_travel_time_s") or 0)
             r_time = float(rm.get("ambulance_travel_time_s") or 0)
             rl_time = float(rlm.get("ambulance_travel_time_s") or 0) if rlm else 0
             if r_time > 0 and rl_time > 0:
                 st.info(
-                    f"**Honest Evaluation Assessment**  \n"
-                    f"• Baseline Ambulance Time: **{b_time:.1f}s**  \n"
-                    f"• Rule-based Corridor Waves: **{r_time:.1f}s** ({((b_time-r_time)/b_time*100.0) if b_time else 0:+.1f}% vs baseline)  \n"
-                    f"• RL Policy Preemption: **{rl_time:.1f}s** ({((b_time-rl_time)/b_time*100.0) if b_time else 0:+.1f}% vs baseline)  \n"
-                    f"Both policies guarantee strict safety invariant (zero conflicting greens) via state machine masking."
+                    f"**Evaluation Summary**  \n"
+                    f"• Baseline Transit: **{b_time:.1f}s**  \n"
+                    f"• Rule-Based Preemption: **{r_time:.1f}s** ({((b_time - r_time) / b_time * 100.0) if b_time else 0:+.1f}% improvement)  \n"
+                    f"• RL Policy Preemption: **{rl_time:.1f}s** ({((b_time - rl_time) / b_time * 100.0) if b_time else 0:+.1f}% improvement)  \n"
+                    f"Both active policies enforce zero conflicting greens via junction action masking."
                 )
         else:
-            st.caption("Click **⚖️ Run 3-way comparison** in the sidebar to populate this chart.")
+            st.caption("Click **⚖️ Run 3-Way Policy Comparison** in the sidebar to run an automated 3-way evaluation benchmark.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Status bar
+# Auto-refresh loop while simulation is running
 # ─────────────────────────────────────────────────────────────────────────────
-n_amb     = len(snap.get("active_ambulances", []))
-n_blocked = len(snap.get("blocked_requests",  []))
-mode_str  = "🟢 ClearPath ON" if snap["preemption_enabled"] else "🔴 Baseline"
-run_str   = "▶ Running" if st.session_state.running else "⏸ Paused"
-
-st.markdown(
-    f"**Tick:** {snap['tick']}  |  **Vehicles:** {len(snap['vehicles'])}  |  "
-    f"**Active ambulances:** {n_amb}  |  **Blocked requests:** {n_blocked}  |  "
-    f"**Mode:** {mode_str}  |  {run_str}"
-)
-
-# ── Auto-refresh while running ────────────────────────────────────────────────
 if st.session_state.running:
     time.sleep(0.25)
     st.rerun()

@@ -38,6 +38,13 @@ htmlcov/
 .tox/
 .nox/
 
+# ClearPath runtime data
+data/contact.jsonl
+
+# Web frontend
+web/node_modules/
+web/dist/
+
 # IDE and OS files
 .vscode/
 .idea/
