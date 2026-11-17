@@ -29,10 +29,10 @@ The ClearPath-lite interactive dashboard ([clearpath/dashboard/app.py](file:///a
 
 Launch the Streamlit app from the repository root:
 ```bash
-# Using Makefile
-make dashboard
+# Recommended multi-page entry point
+streamlit run streamlit_app.py
 
-# Or direct Python CLI
+# Or backwards-compatible CLI
 python -m streamlit run clearpath/dashboard/app.py
 ```
 By default, the server listens at `http://localhost:8501`.

@@ -25,6 +25,8 @@ ClearPath-lite is an open-source, multi-agent AI system designed for intelligent
 | [SIMULATION.md](SIMULATION.md) | Synthetic 2D urban grid physics, IDM-lite car-following mechanics, Poisson traffic demand generation, clearance intervals, and physical limitations. |
 | [API.md](API.md) | FastAPI REST service specification, endpoint schemas, concurrency guarantees (`asyncio.Lock`), and verified `curl` execution examples. |
 | [DASHBOARD_GUIDE.md](DASHBOARD_GUIDE.md) | Interactive Streamlit interface guide, map visualization layers, signal indicator interpretation, security verdict inspection, and scenario reproduction. |
+| [DEPLOY_STREAMLIT.md](DEPLOY_STREAMLIT.md) | Complete deployment guide for launching the multi-page Streamlit application to Streamlit Community Cloud or Docker containers. |
+| [UI_QA_REPORT.md](UI_QA_REPORT.md) | Quality assurance and compliance report verifying all 20 UI features, editorial design tokens, and zero-overflow responsive testing. |
 | [METRICS.md](METRICS.md) | Mathematical formulas, telemetry collection rules, vehicle coverage boundaries, and implementation code references for all system metrics. |
 | [RESULTS.md](RESULTS.md) | Verified empirical benchmarks: normal traffic baselines, emergency preemption comparison, 6-attack spoofed audit, 5-seed sweeps, and 3-way RL evaluation. |
 | [RL_POLICY.md](RL_POLICY.md) | Reinforcement learning environment (`ClearPathGridEnv`), action masking, shared multi-agent Q-network architecture, and policy evaluation versus rule heuristics. |
@@ -71,7 +73,7 @@ To prepare a live interactive showcase in under 3 minutes:
 
 ## Core Verification Metrics
 All figures in these documents are derived directly from the automated benchmark suite:
-- **Test Suite Status:** `114 / 114 passed` (100% green).
+- **Test Suite Status:** `119 / 119 passed` (100% green).
 - **Emergency Travel Time:** Dropped from **111.0 s** (Baseline) to **35.0 s** (ClearPath) — **-68.5% transit time reduction**.
 - **Ambulance Stops:** Reduced from **7 stops** to **0 stops** (unbroken green wave).
 - **Network Recovery:** Cross-traffic throughput returns to **97.7%** of baseline throughput within recovery window + 60s.
