@@ -53,7 +53,7 @@ def render_results_page() -> None:
             }
             for c in checklist
         ]
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
     # ── 2. Emergency Preemption vs. Baseline Comparison ─────────────────────────
     st.markdown("### 2. Emergency Preemption vs. Uncoordinated Baseline")
@@ -66,7 +66,7 @@ def render_results_page() -> None:
         {"Metric": "Inter-Agent Coordination Messages", "Baseline (Preemption OFF)": "150 msgs", "ClearPath (Preemption ON)": "74 msgs", "Delta / Speedup": "Targeted multicast reservation"},
         {"Metric": "Throughput at Recovery + 60s", "Baseline (Preemption OFF)": "0.112 veh/t", "ClearPath (Preemption ON)": "0.120 veh/t", "Delta / Speedup": "+7.1% (107.1% recovery ratio)"},
     ]
-    st.dataframe(pd.DataFrame(comparison_table), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(comparison_table), width="stretch", hide_index=True)
 
     # ── 3. 5-Seed Random Sweep ──────────────────────────────────────────────────
     st.markdown("### 3. Five-Seed Deterministic Sweep")
@@ -90,7 +90,7 @@ def render_results_page() -> None:
         {"Policy": "Rule-Based Coordinated Waves", "Ambulance Transit": "35.0 s", "Stops": 0, "Conflicting Greens": 0, "Guaranteed Green Wave": "Yes (Deterministic hold-green)"},
         {"Policy": "Learned RL Policy (Safety Masked)", "Ambulance Transit": "38.2 s", "Stops": 0, "Conflicting Greens": 0, "Guaranteed Green Wave": "Yes (Action masked state machine)"},
     ]
-    st.dataframe(pd.DataFrame(tri_policy), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(tri_policy), width="stretch", hide_index=True)
 
     # ── 5. Honest Technical Interpretation ──────────────────────────────────────
     st.markdown("### 5. Honest Engineering Interpretation & Limitations")

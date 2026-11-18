@@ -233,6 +233,19 @@ class ClearPathEngine:
         # 4b. Dispatcher reroute check
         self.dispatcher.step(world_view, t)
 
+        # Synchronize any dynamic traffic reroute to the simulator vehicle and corridor tracker
+        for vid, entry in list(self._active_ambulances.items()):
+            plan = self.dispatcher._plans.get(vid)
+            if plan and plan.get("path"):
+                entry["plan"] = plan
+                if vid in self.sim.vehicles:
+                    veh = self.sim.vehicles[vid]
+                    curr_path = plan["path"]
+                    curr_target = veh.edge[1]
+                    if curr_target in curr_path:
+                        target_idx = curr_path.index(curr_target)
+                        veh.route = list(curr_path[target_idx + 1:])
+
         # 4c. Junction agents
         for junction in self.junctions.values():
             junction.step(world_view, t)
@@ -252,6 +265,7 @@ class ClearPathEngine:
         request: PreemptionRequest,
         incident_type: str = "general",
         ground_truth_valid: Optional[bool] = None,
+        target_hospital_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Authenticate then act on a preemption request.
 
@@ -265,6 +279,8 @@ class ClearPathEngine:
             True when the scenario runner knows this is a genuine request;
             False when it is a known spoof.  Used only to update false-accept /
             false-reject counters.
+        target_hospital_id : str | None
+            Explicit hospital ID to override automated triage ranking.
 
         Returns
         -------
@@ -300,7 +316,13 @@ class ClearPathEngine:
 
         # Plan the corridor
         world_view = self.sim.get_world_view()
-        dispatch = self.dispatcher.dispatch(request.vehicle_id, request.incident_loc, incident_type, world_view)
+        dispatch = self.dispatcher.dispatch(
+            request.vehicle_id,
+            request.incident_loc,
+            incident_type,
+            world_view,
+            target_hospital_id=target_hospital_id,
+        )
 
         if dispatch.get("dispatched"):
             path = dispatch["path"]
@@ -353,6 +375,15 @@ class ClearPathEngine:
         self._active_ambulances = {}
         self._blocked_requests = []
         self._build(baseline=self.metrics.baseline)
+
+    def inject_traffic_jam(self, u: str, v: str, num_vehicles: int = 8) -> List[str]:
+        """Inject an intentional civilian traffic bottleneck onto a road corridor."""
+        return self.sim.inject_traffic_jam(u, v, num_vehicles=num_vehicles)
+
+    def clear_traffic_jams(self, u: Optional[str] = None, v: Optional[str] = None) -> int:
+        """Clear traffic congestion bottlenecks."""
+        return self.sim.clear_traffic_jams(u, v)
+
 
     def snapshot(self) -> Dict[str, Any]:
         """Return a JSON-serialisable state snapshot for the dashboard / API."""

@@ -6,10 +6,11 @@ enableStaticServing = true
 headless = true
 
 [theme]
-base = "light"
-primaryColor = "#C8401B"
-backgroundColor = "#F1EEE6"
-secondaryBackgroundColor = "#F8F6F0"
-textColor = "#141815"
+base = "dark"
+primaryColor = "#38BDF8"
+backgroundColor = "#080C14"
+secondaryBackgroundColor = "#0E1524"
+textColor = "#F8FAFC"
 font = "sans serif"
+
 

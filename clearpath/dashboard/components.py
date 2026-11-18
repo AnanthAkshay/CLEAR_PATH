@@ -1,11 +1,10 @@
-"""Reusable UI components for ClearPath Streamlit Application.
+"""Reusable UI components for ClearPath Streamlit Command Center.
 
-Adheres strictly to editorial design guidelines:
-- Zero emojis, zero drop shadows, zero gradients, zero glassmorphism
-- Hairline borders (1px)
-- Archivo headings, Public Sans body, IBM Plex Mono numerals
-- Accessible G/Y/R signal indicators
-- Interactive dialogs, search, skeletons, and cookie consent
+Engineered for high-density, mission-critical operational intelligence:
+- Live status indicators and telemetry badges
+- High-contrast accessible G/Y/R signal indicators
+- Interactive dialogs, site search, and streamlined consent
+- Precision typography pairing: Plus Jakarta Sans + Inter + JetBrains Mono
 """
 
 from __future__ import annotations
@@ -40,29 +39,36 @@ def get_git_commit_date() -> str:
         return datetime.date.today().isoformat()
 
 
-def render_sticky_header(current_page: str = "Home", dark_mode: bool = False) -> None:
-    """Render top sticky bar with skip-to-content, brand, theme switch, and operator sign-in."""
+def render_sticky_header(current_page: str = "Home", dark_mode: bool = True) -> None:
+    """Render top command bar with status dot, brand mark, page indicator, and actions."""
     mode = "dark" if dark_mode else "light"
     t = TOKENS[mode]
 
-    # 1. Skip to Content Link (Feature 4, 12)
+    # Skip to Content Link (Accessibility)
     st.markdown(
         '<a href="#main-content" class="cp-skip-link">Skip to main content</a>',
         unsafe_allow_html=True,
     )
 
-    # 2. Scroll progress bar (Feature 8)
+    # Scroll progress bar
     st.markdown('<div class="cp-scroll-progress"></div>', unsafe_allow_html=True)
 
-    # 3. Top sticky header content
+    # Top sticky command header content
     h_col1, h_col2 = st.columns([3, 1])
     with h_col1:
         st.markdown(
             f"""
             <div class="cp-brand-wrap">
-                <a href="/" class="cp-brand-name">ClearPath</a>
-                <span class="cp-brand-badge">Autonomous Corridor Preemption</span>
-                <span class="cp-brand-badge" style="color:var(--cp-accent); font-weight:700;">{current_page}</span>
+                <div class="cp-brand-icon">CP</div>
+                <div>
+                    <a href="/" class="cp-brand-name">ClearPath</a>
+                    <span class="cp-brand-badge" style="margin-left:8px;">PREEMPTION OS</span>
+                    <span class="cp-brand-badge" style="color:var(--cp-accent-hover); font-weight:700; border-color:var(--cp-rule-active);">{current_page}</span>
+                </div>
+                <div class="cp-status-pill" style="margin-left:8px;">
+                    <div class="cp-status-dot"></div>
+                    <span>SIMULATOR ACTIVE</span>
+                </div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -71,13 +77,13 @@ def render_sticky_header(current_page: str = "Home", dark_mode: bool = False) ->
     with h_col2:
         btn_c1, btn_c2 = st.columns([1, 1])
         with btn_c1:
-            theme_label = "Light" if dark_mode else "Dark"
+            theme_label = "☀ Light" if dark_mode else "🌙 Dark"
             if st.button(theme_label, key="header_theme_toggle", help="Toggle Light / Dark mode"):
                 st.session_state.dark_mode = not st.session_state.dark_mode
                 st.rerun()
         with btn_c2:
-            op_label = "Operator [Active]" if st.session_state.get("operator_authenticated") else "Sign in"
-            if st.button(op_label, key="header_operator_signin", help="Demo Operator Access"):
+            op_label = "Operator ✓" if st.session_state.get("operator_authenticated") else "Sign In"
+            if st.button(op_label, key="header_operator_signin", help="Operator Console Access"):
                 st.session_state.show_operator_dialog = True
                 st.rerun()
 
@@ -86,70 +92,73 @@ def render_sticky_header(current_page: str = "Home", dark_mode: bool = False) ->
 
 
 def render_cookie_banner() -> None:
-    """Render one-sentence privacy and preference banner (Feature 2)."""
+    """Render sleek floating toast banner for privacy preferences."""
     if st.session_state.get("cookie_choice_made"):
         return
 
-    st.markdown(
-        """
-        <div class="cp-cookie-banner">
-            <div class="cp-cookie-text">
-                This prototype stores interface preferences (theme and navigation state) in session memory; no tracking or third-party cookies exist.
+    with st.container():
+        st.markdown(
+            """
+            <div class="cp-cookie-banner">
+                <div style="font-weight:700; font-family:var(--cp-font-heading); margin-bottom:4px; color:var(--cp-ink);">
+                    Interface Preferences & Local State
+                </div>
+                <div class="cp-cookie-text">
+                    This simulation prototype preserves theme and scenario parameters purely in your browser session. No third-party tracking scripts or tracking cookies exist.
+                </div>
             </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    b_col1, b_col2, _ = st.columns([1, 1, 3])
-    with b_col1:
-        if st.button("Accept preferences", key="cookie_accept", type="primary"):
-            st.session_state.cookie_consent = True
-            st.session_state.cookie_choice_made = True
-            st.rerun()
-    with b_col2:
-        if st.button("Decline preferences", key="cookie_decline"):
-            st.session_state.cookie_consent = False
-            st.session_state.cookie_choice_made = True
-            # Clear any captured UTM parameters if declined
-            st.session_state.utm_params = {}
-            st.rerun()
+            """,
+            unsafe_allow_html=True,
+        )
+        c1, c2, _ = st.columns([1, 1, 3])
+        with c1:
+            if st.button("Accept", key="cookie_accept", type="primary"):
+                st.session_state.cookie_consent = True
+                st.session_state.cookie_choice_made = True
+                st.rerun()
+        with c2:
+            if st.button("Decline", key="cookie_decline"):
+                st.session_state.cookie_consent = False
+                st.session_state.cookie_choice_made = True
+                st.session_state.utm_params = {}
+                st.rerun()
 
 
-@st.dialog("Operator Sign-in (Simulation Access)")
+@st.dialog("Operator Console Authentication")
 def show_operator_dialog() -> None:
-    """Password field with visibility toggle on clearly labelled demo form (Feature 13)."""
+    """Operator password dialog for elevated simulation overrides."""
     st.markdown(
         """
-        **Simulation Operator Console Access**  
-        *Notice:* This demonstration sign-in grants simulated administrative privileges within this research prototype session. It is not connected to real emergency infrastructure.
+        **Urban Traffic Management Console**  
+        *Demo authorization grants manual emergency preemption overrides and simulated corridor locks.*
         """
     )
     with st.form("operator_signin_form"):
         pwd = st.text_input(
-            "Operator Password (Demo: clearpath2026)",
+            "Operator Passcode (Demo: clearpath2026)",
             type="password",
-            help="Toggle the eye icon on the right to show or hide the password.",
+            help="Default research session passcode: clearpath2026",
         )
         submitted = st.form_submit_button("Authenticate Operator", type="primary")
         if submitted:
-            if pwd.strip() == "clearpath2026" or pwd.strip() == "admin":
+            if pwd.strip() in ("clearpath2026", "admin"):
                 st.session_state.operator_authenticated = True
                 st.session_state.show_operator_dialog = False
-                st.success("Operator session authenticated. Elevated preemption controls unlocked.")
+                st.success("Operator session authenticated. Preemption actuators unlocked.")
                 st.rerun()
             else:
-                st.error("Invalid operator credential. Use demonstration password: clearpath2026")
+                st.error("Invalid passcode. Enter 'clearpath2026' for research prototype access.")
 
 
 @st.dialog("Confirm Simulation Reset")
 def show_reset_confirmation(on_confirm: Callable[[], None]) -> None:
-    """Confirmation dialog before resetting simulation state (Feature 17)."""
+    """Confirmation modal prior to resetting simulation state."""
     st.markdown(
-        "Are you sure you want to reset the simulation? All rolling snapshots, message bus logs, and active corridor plans will be reinitialized."
+        "Are you sure you want to re-initialize the simulation environment? All vehicle queues, active corridors, and bus messages will reset to tick 0."
     )
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("Confirm Reset", type="primary", key="dlg_confirm_reset"):
+        if st.button("Reset Grid", type="primary", key="dlg_confirm_reset"):
             on_confirm()
             st.rerun()
     with col2:
@@ -157,28 +166,30 @@ def show_reset_confirmation(on_confirm: Callable[[], None]) -> None:
             st.rerun()
 
 
-@st.dialog("Confirm Emergency Preemption Dispatch")
+@st.dialog("Confirm Code-3 Preemption Dispatch")
 def show_dispatch_confirmation(
     vehicle_id: str,
     hospital_name: str,
     incident_type: str,
     on_confirm: Callable[[], None],
+    incident_origin: str = "j_0_0",
 ) -> None:
-    """Confirmation dialog before dispatching emergency vehicle (Feature 17)."""
+    """Confirmation modal prior to launching green-wave preemption."""
     st.markdown(
         f"""
-        **Confirm Preemption Request Generation**
-        - Vehicle ID: `{vehicle_id}`
-        - Incident Classification: `{incident_type.upper()}`
-        - Destination Target: `{hospital_name}`
-        - Cryptographic Token: `HMAC-SHA256 Signed Nonce`
+        **Verify Emergency Preemption Parameters**
+        - **Emergency Unit:** `{vehicle_id}`
+        - **Incident Origin:** `{incident_origin}`
+        - **Triage Level:** `{incident_type.upper()}`
+        - **Destination Facility:** `{hospital_name}`
+        - **Token Security:** `HMAC-SHA256 Nonce Verification`
         
-        This will initiate multi-junction corridor reservation and lock green phases along the planned route.
+        This issues priority reservations along the planned corridor, forcing intersecting approaches into clearance yellow before locking green phases.
         """
     )
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("Dispatch Preemption", type="primary", key="dlg_confirm_dispatch"):
+        if st.button("Authorize Preemption", type="primary", key="dlg_confirm_dispatch"):
             on_confirm()
             st.rerun()
     with col2:
@@ -193,10 +204,19 @@ def render_big_numeral(
     delta: str = "",
     delta_good: bool = True,
 ) -> None:
-    """Editorial IBM Plex Mono metric box (Feature 6, Design Rules)."""
-    delta_color = "var(--cp-signal-green)" if delta_good else "var(--cp-signal-red)"
+    """Modern command center metric card with micro-badges and JetBrains Mono numerals."""
+    delta_bg = "rgba(16, 185, 129, 0.12)" if delta_good else "rgba(239, 68, 68, 0.12)"
+    delta_color = "var(--cp-signal-green)" if delta_good else "var(--cp-emergency)"
+    delta_border = "rgba(16, 185, 129, 0.25)" if delta_good else "rgba(239, 68, 68, 0.25)"
+
     delta_html = (
-        f'<div class="cp-metric-sub" style="color:{delta_color}; font-weight:600;">{delta}</div>'
+        f"""
+        <div class="cp-metric-sub">
+            <span style="background:{delta_bg}; color:{delta_color}; border:1px solid {delta_border}; padding:2px 8px; border-radius:4px;">
+                {delta}
+            </span>
+        </div>
+        """
         if delta
         else '<div class="cp-metric-sub">&nbsp;</div>'
     )
@@ -204,7 +224,7 @@ def render_big_numeral(
         f"""
         <div class="cp-metric-box">
             <div class="cp-metric-label">{label}</div>
-            <div class="cp-metric-value">{value}<span style="font-size:1.1rem; color:var(--cp-muted); font-weight:400; margin-left:4px;">{unit}</span></div>
+            <div class="cp-metric-value">{value}<span style="font-size:1.1rem; color:var(--cp-muted); font-weight:500; margin-left:4px;">{unit}</span></div>
             {delta_html}
         </div>
         """,
@@ -219,17 +239,19 @@ def render_agent_row(
     algorithm_summary: str,
     status: str = "Active",
 ) -> None:
-    """Numbered row for one of the four agents (Design Rules)."""
+    """Structured architectural row for multi-agent system overview."""
     st.markdown(
         f"""
-        <div class="cp-agent-row">
-            <div class="cp-agent-num">{num}</div>
+        <div style="background:var(--cp-surface); border:1px solid var(--cp-rule); border-radius:var(--cp-radius); padding:16px 20px; margin-bottom:12px; display:grid; grid-template-columns:40px 1fr auto; gap:16px; align-items:center;">
+            <div style="font-family:var(--cp-font-mono); font-weight:800; font-size:1.2rem; color:var(--cp-accent-hover);">{num}</div>
             <div>
-                <div class="cp-agent-name">{name} <span style="font-weight:400; font-size:0.8rem; color:var(--cp-muted); margin-left:6px;">[{role}]</span></div>
-                <div class="cp-agent-desc">{algorithm_summary}</div>
+                <div style="font-family:var(--cp-font-heading); font-weight:700; font-size:1rem; color:var(--cp-ink);">
+                    {name} <span style="font-weight:500; font-size:0.8rem; color:var(--cp-muted); margin-left:6px;">[{role}]</span>
+                </div>
+                <div style="font-size:0.85rem; color:var(--cp-ink-secondary); margin-top:3px; line-height:1.4;">{algorithm_summary}</div>
             </div>
             <div>
-                <span class="cp-brand-badge">{status}</span>
+                <span class="cp-brand-badge" style="color:var(--cp-signal-green); border-color:rgba(16,185,129,0.3); background:rgba(16,185,129,0.08);">{status}</span>
             </div>
         </div>
         """,
@@ -238,61 +260,53 @@ def render_agent_row(
 
 
 def render_preemption_timeline() -> None:
-    """Editorial vertical timeline for corridor preemption flow (Design Rules)."""
+    """Interactive visual timeline detailing the end-to-end corridor lifecycle."""
     steps = [
         (
-            "01 Request Ingestion & Cryptographic Signing",
-            "Emergency vehicle generates a unique 128-bit nonce, reads current telemetry (GPS, speed, heading), and issues an HMAC-SHA256 signature token using its pre-shared key.",
+            "01 Cryptographic Signing",
+            "Emergency vehicle generates a 128-bit cryptographic nonce, binds live GPS/speed/heading telemetry, and issues an HMAC-SHA256 authentication token.",
         ),
         (
-            "02 Cyber-Physical Security Verification",
-            "Security Agent verifies token validity against replay attacks, enforces cryptographic expiration (window <= 60s), checks kinematic speed limits (<= 35 m/s), and validates geographic coordinate continuity.",
+            "02 Cyber-Physical Gate Verification",
+            "Security Gateway Agent checks token signature, enforces nonce replay caches, checks time expiration (window <= 60s), and rejects impossible kinematics (> 35 m/s).",
         ),
         (
-            "03 Dispatcher Triage & Dynamic Routing",
-            "Dispatcher Agent calculates hospital suitability using weighted bed availability and specialized trauma care, executes density-aware Dijkstra / A* route planning, and generates arrival ETA schedules per junction.",
+            "03 Dispatcher Facility Triage & Routing",
+            "Dispatcher computes facility scores balancing travel time with trauma bed availability, running density-aware A* routing across grid links.",
         ),
         (
-            "04 Corridor Negotiation Handshake",
-            "Dispatcher broadcasts ReserveCorridor requests. Each Junction Agent evaluates conflicting reservations, initiates yellow change intervals, and returns ReserveAck or ReserveNack with fallback.",
+            "04 Inter-Junction Reservation Handshake",
+            "Junction Controllers receive ETA schedules, evaluate cross-traffic queue depth, initiate mandatory yellow clearance, and return ReserveAck commitments.",
         ),
         (
-            "05 Green-Wave Execution & Queue Flush",
-            "Junction Controllers lock green signals for the corridor approach, trigger preemptive queue flushes on downstream links, and notify the Guidance Agent to broadcast civilian lane clearing.",
+            "05 Green-Wave Lock & Queue Flushing",
+            "Downstream intersections flush standing queues prior to arrival, locking solid green corridor phases while the Guidance Agent issues driver yield advisories.",
         ),
         (
-            "06 Corridor Release & Balanced Recovery",
-            "Ambulance broadcasts PassedNotice upon crossing the stop line. Junctions transition to a compensated recovery phase, prioritizing cross-traffic queues to prevent starvation.",
+            "06 Balanced Post-Preemption Recovery",
+            "Upon ambulance passage (PassedNotice), intersections execute fair recovery phases, allocating extended green splits to cross streets to restore equilibrium.",
         ),
     ]
 
     items_html = "".join(
         f"""
-        <div class="cp-timeline-step">
-            <div class="cp-timeline-marker"></div>
-            <div class="cp-timeline-title">{title}</div>
-            <div class="cp-timeline-body">{desc}</div>
+        <div style="position:relative; padding-left:32px; margin-bottom:20px; border-left:2px solid var(--cp-rule);">
+            <div style="position:absolute; left:-7px; top:3px; width:12px; height:12px; border-radius:50%; background:var(--cp-accent-hover); box-shadow:0 0 8px var(--cp-accent-glow);"></div>
+            <div style="font-family:var(--cp-font-heading); font-weight:700; font-size:0.98rem; color:var(--cp-ink);">{title}</div>
+            <div style="font-size:0.86rem; color:var(--cp-ink-secondary); margin-top:4px; line-height:1.45;">{desc}</div>
         </div>
         """
         for title, desc in steps
     )
 
-    st.markdown(f'<div class="cp-timeline">{items_html}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div style="margin:20px 0;">{items_html}</div>', unsafe_allow_html=True)
 
 
 def render_skeleton(kind: str = "card") -> None:
-    """Skeleton loading placeholder with pulse disabled under prefers-reduced-motion (Feature 6)."""
-    if kind == "map":
-        height = "480px"
-    elif kind == "table":
-        height = "220px"
-    elif kind == "kpi":
-        height = "110px"
-    else:
-        height = "160px"
-
+    """Skeleton loader placeholder for asynchronous transitions."""
+    height = "480px" if kind == "map" else ("220px" if kind == "table" else "120px")
     st.markdown(
-        f'<div class="cp-skeleton" style="height:{height}; width:100%; margin-bottom:16px;"></div>',
+        f'<div style="height:{height}; width:100%; background:var(--cp-surface); border:1px solid var(--cp-rule); border-radius:var(--cp-radius); animation:cp-pulse 1.8s infinite ease-in-out; margin-bottom:16px;"></div>',
         unsafe_allow_html=True,
     )
 
@@ -302,10 +316,10 @@ def render_site_search(
     faq_list: List[Dict[str, str]],
     results_dict: Dict[str, Any],
 ) -> None:
-    """Search box that filters docs, FAQ, and results with highlighted matches (Feature 3)."""
+    """Search utility indexing documentation, FAQ, and scenario verification results."""
     query = st.text_input(
-        "Search documentation, benchmarks, and FAQ",
-        placeholder="Search keywords (e.g., HMAC, A*, starvation, recovery, replay)...",
+        "Search documentation, algorithms, and benchmark results",
+        placeholder="Search keywords (e.g., HMAC, A*, starvation, recovery, replay, green wave)...",
         key="global_site_search",
     ).strip()
 
@@ -315,78 +329,60 @@ def render_site_search(
     q_lower = query.lower()
     matches: List[Tuple[str, str, str]] = []
 
-    # 1. Search FAQ
     for item in faq_list:
         q_text = item.get("question", "")
         a_text = item.get("answer", "")
         if q_lower in q_text.lower() or q_lower in a_text.lower():
-            snippet = a_text[:240] + ("..." if len(a_text) > 240 else "")
-            matches.append(("FAQ", q_text, snippet))
+            matches.append(("FAQ", q_text, a_text[:220] + "..."))
 
-    # 2. Search Documentation
     for doc_name, doc_content in docs_dict.items():
         if q_lower in doc_name.lower() or q_lower in doc_content.lower():
-            # Extract sentence with match
             idx = doc_content.lower().find(q_lower)
-            start = max(0, idx - 60)
+            start = max(0, idx - 40)
             end = min(len(doc_content), idx + 140)
-            snippet = "..." + doc_content[start:end].replace("\n", " ") + "..."
-            matches.append((f"Docs: {doc_name}", f"Section in {doc_name}", snippet))
+            matches.append((f"Docs: {doc_name}", f"Section in {doc_name}", "..." + doc_content[start:end].replace("\n", " ") + "..."))
 
-    # 3. Search Results Checklist
     for chk in results_dict.get("checklist", []):
         c_title = chk.get("title", "")
         c_details = chk.get("details", "")
         if q_lower in c_title.lower() or q_lower in c_details.lower():
             matches.append(("Benchmark Results", c_title, c_details))
 
-    st.markdown(f"**Found {len(matches)} matching results for '{html.escape(query)}':**")
-    if matches:
-        for cat, title, snippet in matches[:10]:
-            # Highlight matching query text
-            h_snippet = snippet
-            try:
-                # Case-insensitive replacement
-                import re
-                pattern = re.compile(re.escape(query), re.IGNORECASE)
-                h_snippet = pattern.sub(lambda m: f"<mark>{m.group(0)}</mark>", html.escape(snippet))
-            except Exception:
-                pass
-            st.markdown(
-                f"""
-                <div class="cp-card" style="padding:12px 16px; margin-bottom:8px;">
-                    <div style="font-size:0.75rem; text-transform:uppercase; color:var(--cp-accent); font-weight:700;">{cat}</div>
-                    <div style="font-weight:700; font-size:0.95rem; margin:2px 0;">{title}</div>
-                    <div style="font-size:0.82rem; color:var(--cp-muted); line-height:1.4;">{h_snippet}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-    else:
-        st.caption("No matching content found. Try keywords like 'HMAC', 'ETA', 'Junction', 'Preemption', or 'Metrics'.")
+    st.markdown(f"**Found {len(matches)} matches for '{html.escape(query)}':**")
+    for cat, title, snippet in matches[:8]:
+        st.markdown(
+            f"""
+            <div class="cp-card" style="padding:14px 18px; margin-bottom:10px;">
+                <div style="font-size:0.74rem; text-transform:uppercase; color:var(--cp-accent-hover); font-weight:700; font-family:var(--cp-font-mono);">{cat}</div>
+                <div style="font-weight:700; font-size:1rem; margin:2px 0; color:var(--cp-ink);">{title}</div>
+                <div style="font-size:0.85rem; color:var(--cp-ink-secondary); line-height:1.4;">{html.escape(snippet)}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 def render_floating_contact_button() -> None:
-    """Floating contact link fixed bottom-right via CSS, hidden in print (Feature 20)."""
+    """Floating action trigger pinned to bottom right."""
     st.markdown(
-        '<a href="Contact" class="cp-floating-contact">Contact Operator</a>',
+        '<a href="Contact" class="cp-floating-contact"><span>💬</span> Operator Support</a>',
         unsafe_allow_html=True,
     )
 
 
 def render_footer(last_updated: Optional[str] = None) -> None:
-    """Editorial footer with git commit date, back-to-top link, and license (Feature 4, 18)."""
+    """Command center footer with version, open-source license, and back-to-top shortcut."""
     date_str = last_updated or get_git_commit_date()
     st.markdown(
         f"""
         <div class="cp-footer">
             <div>
-                <b>ClearPath Autonomous Preemption System</b> | Open Source (MIT License)<br>
-                <span>Research prototype for cyber-physical emergency traffic coordination. Not for safety-critical field operations.</span>
+                <b style="color:var(--cp-ink);">ClearPath Autonomous Preemption System</b> | Open Source (MIT License)<br>
+                <span>Cyber-physical emergency traffic management and multi-agent coordination prototype.</span>
             </div>
             <div style="text-align:right;">
-                <span>Last Updated: <b>{date_str}</b></span><br>
-                <a href="#main-content" style="font-weight:600;">Back to top &uarr;</a>
+                <span>System Build: <b class="cp-mono" style="color:var(--cp-ink);">{date_str}</b></span><br>
+                <a href="#main-content" style="font-weight:600; color:var(--cp-accent-hover);">Back to top ↑</a>
             </div>
         </div>
         """,

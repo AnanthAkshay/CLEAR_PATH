@@ -94,8 +94,12 @@ class DispatcherAgent(Agent):
         incident_loc: Tuple[float, float],
         incident_type: str,
         world_view: Any,
+        target_hospital_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Rank hospitals for an incident and publish the chosen corridor plan."""
+        """Rank hospitals for an incident and publish the chosen corridor plan.
+        
+        If target_hospital_id is provided, routes directly to that hospital facility.
+        """
         origin = self.network.nearest_node(float(incident_loc[0]), float(incident_loc[1]))
         result: Dict[str, Any] = {
             "vehicle_id": vehicle_id,
@@ -114,11 +118,41 @@ class DispatcherAgent(Agent):
         ranked, degraded = self._rank(origin, incident_type, weights)
         result["ranked"] = ranked
         result["degraded"] = degraded
-        if not ranked:
+
+        best = None
+        if target_hospital_id:
+            # Match user-selected target hospital
+            for cand in ranked:
+                if cand["hospital_id"] == target_hospital_id or cand.get("node") == target_hospital_id:
+                    best = cand
+                    break
+            if best is None:
+                # Direct route even if specialty filter didn't match
+                hosp = self.network.hospitals.get(target_hospital_id)
+                if hosp:
+                    node = self._hospital_node(hosp)
+                    path = self._shortest(origin, node, weights)
+                    if path:
+                        travel = self._travel_time(path, weights)
+                        wait_s = float(hosp.get("avg_wait_time_min", 0.0)) * 60.0
+                        beds = sum(int(c) for c in hosp.get("available_beds_by_unit", {}).values())
+                        best = {
+                            "hospital_id": hosp["id"],
+                            "name": hosp.get("name", ""),
+                            "node": node,
+                            "beds": beds,
+                            "travel_time_s": round(travel, 2),
+                            "hospital_wait_s": round(wait_s, 2),
+                            "relaxed": True,
+                            "path": path,
+                        }
+        elif ranked:
+            best = ranked[0]
+
+        if best is None:
             result["reason"] = "no reachable hospital with available capacity"
             return result
 
-        best = ranked[0]
         eta, total = self._schedule(best["path"])
         plan = {
             "vehicle_id": vehicle_id,
@@ -186,7 +220,7 @@ class DispatcherAgent(Agent):
         return plan
 
     def reroute_if_congested(self, vehicle_id: str, world_view: Any) -> bool:
-        """Re-plan when the live cost of the active corridor exceeds it by over 25%."""
+        """Re-plan when the live cost of the active corridor exceeds it by over 25% or traffic makes an alternative path faster."""
         plan = self._plans.get(vehicle_id)
         if plan is None:
             return False
@@ -198,7 +232,22 @@ class DispatcherAgent(Agent):
             return False
 
         cost = self._travel_time(path, weights) + head_s
-        if cost <= plan["cost"] * _CONGESTION_RATIO:
+
+        # Evaluate cost of staying on current remaining path under live traffic
+        curr_path = plan.get("path", [])
+        curr_rem: List[str] = []
+        if start in curr_path:
+            idx = curr_path.index(start)
+            curr_rem = list(curr_path[idx:])
+
+        curr_cost = (self._travel_time(curr_rem, weights) + head_s) if len(curr_rem) >= 2 else cost
+        path_diverges = bool(curr_rem and path != curr_rem)
+
+        # Trigger re-plan if:
+        # 1. Total cost exceeds original plan cost by 25%, OR
+        # 2. Current path ahead is congested (>15% slower than alternative) and a better route exists
+        is_congested = (cost > plan["cost"] * _CONGESTION_RATIO) or (path_diverges and curr_cost > cost * 1.15)
+        if not is_congested:
             return False
 
         eta, total = self._schedule(path, head_s)
@@ -300,7 +349,18 @@ class DispatcherAgent(Agent):
         effective = max(self.config.min_speed_mps, limit * (1.0 - density))
         headway = spacing / effective
         queue_len = int(queues.get(edge, 0))
-        return length / effective + queue_len * headway
+
+        # Physical civilian car count on this road segment
+        density_val = float(densities.get(edge, 0.0))
+        car_count = max(0, int(round(density_val * (length / 1000.0))))
+
+        # Realistic emergency vehicle traffic delay:
+        # 1. Base travel time at effective flow speed
+        # 2. Civilian vehicle friction: each car in the ambulance's corridor adds yield/clearing friction
+        # 3. Intersection queue delay: each queued car at the downstream signal adds red-queue clearing time
+        traffic_friction = car_count * 3.5
+        queue_delay = queue_len * max(headway, 3.5)
+        return (length / effective) + traffic_friction + queue_delay
 
     def _weights(self, world_view: Any) -> Dict[Tuple[str, str], float]:
         """Cost every edge of the network for the current world view (cached per tick)."""

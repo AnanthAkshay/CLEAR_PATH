@@ -150,6 +150,16 @@ class Simulator:
     # Actuator Interface
     # -------------------------------------------------------------------------
 
+    def force_signal_phase(
+        self,
+        junction_id: str,
+        phase: SignalPhase | str,
+        reason: str = "manual_operator_override",
+    ) -> None:
+        """Actuator: Directly force a specific signal phase (instantaneous override)."""
+        if junction_id in self.signals:
+            self.signals[junction_id].force_phase(phase, reason=reason)
+
     def set_signal_override(
         self,
         junction_id: str,
@@ -175,6 +185,58 @@ class Simulator:
             if v_id in self.vehicles:
                 veh = self.vehicles[v_id]
                 veh.yield_until_t = max(veh.yield_until_t, until_t)
+
+    def inject_traffic_jam(self, u: str, v: str, num_vehicles: int = 8) -> List[str]:
+        """Inject a bumper-to-bumper civilian traffic jam along a road segment."""
+        edge = (u, v)
+        if not self.network.graph.has_edge(u, v):
+            return []
+
+        edge_data = self.network.graph[u][v]
+        length = float(edge_data.get("length_m", 200.0))
+        lanes = int(edge_data.get("lanes", 1))
+
+        created_ids = []
+        spacing = length / max(1, num_vehicles + 1)
+
+        for i in range(num_vehicles):
+            veh_id = f"jam_car_{u}_{v}_{self.current_tick}_{i}"
+            offset = max(2.0, min(length - 5.0, (i + 1) * spacing))
+            lane = i % lanes
+            veh = Vehicle(
+                id=veh_id,
+                kind="car",
+                edge=edge,
+                offset_m=offset,
+                speed=1.0,
+                lane=lane,
+                route=[],
+                is_stopped=True,
+                wait_time=30.0,
+                length_m=4.5,
+                max_speed=float(edge_data.get("speed_limit_mps", 15.6)),
+                max_accel=2.0,
+            )
+            self.vehicles[veh_id] = veh
+            created_ids.append(veh_id)
+
+        return created_ids
+
+    def clear_traffic_jams(self, u: Optional[str] = None, v: Optional[str] = None) -> int:
+        """Clear injected or all civilian traffic on a road or network-wide."""
+        to_remove = []
+        for veh_id, veh in self.vehicles.items():
+            if veh.kind != "car":
+                continue
+            if u is not None and v is not None:
+                if veh.edge == (u, v):
+                    to_remove.append(veh_id)
+            elif veh_id.startswith("jam_car_"):
+                to_remove.append(veh_id)
+        for vid in to_remove:
+            self.vehicles.pop(vid, None)
+        return len(to_remove)
+
 
     # -------------------------------------------------------------------------
     # Simulation Step Logic

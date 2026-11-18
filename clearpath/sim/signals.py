@@ -148,6 +148,23 @@ class SignalController:
                 self.time_in_phase_s = 0.0
             self.pending_target = SignalPhase.EW_GREEN
 
+    def force_phase(
+        self,
+        target_phase: SignalPhase | str,
+        reason: str = "manual_operator_override",
+    ) -> None:
+        """Immediately force a specific phase for manual operator inspection."""
+        if isinstance(target_phase, str):
+            target_str = target_phase.upper()
+            self.phase = SignalPhase[target_str]
+        else:
+            self.phase = target_phase
+        self.time_in_phase_s = 0.0
+        self.is_preempted = True
+        self.override_phase = self.phase
+        self.override_reason = reason
+        self.pending_target = None
+
     def clear_override(self) -> None:
         """Release preemption lock and resume normal signal cycling."""
         self.is_preempted = False

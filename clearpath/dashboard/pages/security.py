@@ -75,7 +75,7 @@ def render_security_page() -> None:
         },
     ]
 
-    st.dataframe(pd.DataFrame(matrix_data), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(matrix_data), width="stretch", hide_index=True)
 
     # ── Token Format & HMAC Mechanics ───────────────────────────────────────────
     st.markdown("### Cryptographic Token Mechanics")

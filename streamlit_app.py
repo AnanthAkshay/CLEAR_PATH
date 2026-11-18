@@ -45,7 +45,7 @@ st.set_page_config(
 # ─────────────────────────────────────────────────────────────────────────────
 def _init_global_state() -> None:
     defaults = {
-        "dark_mode": False,
+        "dark_mode": True,
         "cookie_choice_made": False,
         "cookie_consent": False,
         "operator_authenticated": False,

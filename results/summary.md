@@ -1,7 +1,7 @@
 # ClearPath-lite Benchmark Summary Report
 
-Generated: 2026-11-17 17:52:22  
-Seed: `42` | Demand: `low`
+Generated: 2026-11-18 23:00:40  
+Seed: `42` | Demand: `med`
 
 ---
 
@@ -9,9 +9,9 @@ Seed: `42` | Demand: `low`
 
 | Check | Item | Status | Details |
 |---|---|:---:|---|
-| CHK-01 | Normal traffic baseline (autonomous cycling, 0 preempted) | ✅ PASS | 600 ticks, throughput=0.593 veh/t, avg speed=7.41 m/s |
-| CHK-02 | Emergency ambulance travel time improvement | ✅ PASS | ClearPath=35.0s vs Baseline=105.0s (-66.7%) |
-| CHK-03 | Network throughput recovery within recovery_s + 60s | ✅ PASS | Recovered to 107.1% of baseline throughput |
+| CHK-01 | Normal traffic baseline (autonomous cycling, 0 preempted) | ✅ PASS | 600 ticks, throughput=1.273 veh/t, avg speed=6.15 m/s |
+| CHK-02 | Emergency ambulance travel time improvement | ✅ PASS | ClearPath=36.0s vs Baseline=111.0s (-67.6%) |
+| CHK-03 | Network throughput recovery within recovery_s + 60s | ✅ PASS | Recovered to 106.8% of baseline throughput |
 | CHK-04 | Security gateway attack rejection (6/6 blocked, 1/1 allowed) | ✅ PASS | Blocked 6/6 attacks (100%), allowed 1/1 legitimate |
 | CHK-05 | Attack signal override isolation (0 overrides from attacks) | ✅ PASS | Zero signal phase overrides caused by spoofed requests |
 
@@ -20,11 +20,11 @@ Seed: `42` | Demand: `low`
 ## 2. Normal Traffic Baseline (run_normal.py)
 
 - **Ticks Simulated:** 600
-- **Average Network Speed:** 7.41 m/s
-- **Network Throughput:** 0.593 veh/tick
-- **Completed Vehicles:** 356
-- **Mean Approach Queue:** 1.60 vehicles
-- **Max Approach Queue:** 10 vehicles
+- **Average Network Speed:** 6.15 m/s
+- **Network Throughput:** 1.273 veh/tick
+- **Completed Vehicles:** 764
+- **Mean Approach Queue:** 2.55 vehicles
+- **Max Approach Queue:** 13 vehicles
 - **Preempted Signals:** 0 (zero agent interference)
 
 ---
@@ -33,14 +33,14 @@ Seed: `42` | Demand: `low`
 
 | Metric | Baseline (Preemption OFF) | ClearPath (Preemption ON) | Improvement / Delta |
 |---|:---:|:---:|:---:|
-| **Ambulance Travel Time** | 105.0 s | 35.0 s | **-70.0 s (66.7%)** |
-| **Ambulance Stops** | 3 | 0 | -3 stops |
+| **Ambulance Travel Time** | 111.0 s | 36.0 s | **-75.0 s (67.6%)** |
+| **Ambulance Stops** | 7 | 0 | -7 stops |
 | **Cross-Traffic Delay (avg)** | 0.0 s | 0.0 s | 0.0 s |
 | **Cross-Traffic Delay (p95)** | 0.0 s | 0.0 s | 0.0 s |
-| **Max Queue Length** | 10 veh | 10 veh | 0 veh |
-| **Recovery Duration (avg)** | — | 31.0 s | Standard recovery cycle |
-| **Messages Exchanged** | 150 | 74 | Inter-junction coordination |
-| **Throughput @ Recovery+60s** | 0.112 veh/t | 0.120 veh/t | 107.1% of baseline |
+| **Max Queue Length** | 13 veh | 13 veh | 0 veh |
+| **Recovery Duration (avg)** | — | 34.0 s | Standard recovery cycle |
+| **Messages Exchanged** | 336 | 197 | Inter-junction coordination |
+| **Throughput @ Recovery+60s** | 0.349 veh/t | 0.373 veh/t | 106.8% of baseline |
 
 ---
 
